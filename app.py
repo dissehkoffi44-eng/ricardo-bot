@@ -45,7 +45,7 @@ st.markdown("""
     .metric-container { background: #1a1c24; padding: 15px; border-radius: 15px; border: 1px solid #333; text-align: center; min-height: 110px; display: flex; flex-direction: column; justify-content: center; }
     .metric-label { font-size: 0.8em; color: #888; text-transform: uppercase; }
     .value-custom { font-size: 1.8em; font-weight: 800; color: #FFFFFF; }
-    .final-decision-box { padding: 30px; border-radius: 20px; text-align: center; margin: 10px 0; border: 1px solid rgba(255,255,255,0.1); }
+    .final-decision-box { padding: 40px; border-radius: 25px; text-align: center; margin: 15px 0; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5); background: #2ecc71; color: white; }
     .profile-tag { background: rgba(99, 102, 241, 0.1); color: #a5b4fc; padding: 3px 8px; border-radius: 6px; font-size: 0.75em; margin: 2px; display: inline-block; border: 1px solid rgba(99, 102, 241, 0.3); }
     </style>
     """, unsafe_allow_html=True)
