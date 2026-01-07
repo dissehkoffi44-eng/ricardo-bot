@@ -132,11 +132,11 @@ def play_chord_button(note_mode, uid):
 
 # --- ANALYSE PRINCIPALE ---
 
-@st.cache_data(show_spinner=False)
-def process_audio(file_bytes, file_name):
+def process_audio(file_bytes, file_name, progress_bar, status_text):
     try:
+        # Initialisation progression
+        status_text.text(f"Chargement de {file_name}...")
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
-        # Normalisation pour une meilleure précision
         y = librosa.util.normalize(y)
         
         y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
@@ -147,7 +147,15 @@ def process_audio(file_bytes, file_name):
         step, timeline = 8, []
         votes = Counter()
         
-        for start in range(0, int(duration) - step, step):
+        segments = list(range(0, int(duration) - step, step))
+        total_steps = len(segments)
+
+        for idx, start in enumerate(segments):
+            # Mise à jour du pourcentage 1-100%
+            percent = int(((idx + 1) / total_steps) * 100)
+            progress_bar.progress(percent / 100)
+            status_text.text(f"Analyse de {file_name} : {percent}%")
+
             y_seg = y_filt[int(start*sr):int((start+step)*sr)]
             if np.max(np.abs(y_seg)) < 0.015: continue 
             
@@ -206,16 +214,24 @@ st.title("🎧 RCDJ228 M1")
 uploaded_files = st.file_uploader("📂 Chargez vos fichiers audio", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
-    pbar = st.progress(0)
-    for i, f in enumerate(uploaded_files):
-        file_data = f.read()
-        res = process_audio(file_data, f.name)
+    for f in uploaded_files:
+        # Éléments de progression dédiés à chaque fichier
+        st.divider()
+        status_text = st.empty()
+        pbar = st.progress(0)
         
+        file_data = f.read()
+        res = process_audio(file_data, f.name, pbar, status_text)
+        
+        # Nettoyage après analyse
+        status_text.empty()
+        pbar.empty()
+
         if "error" in res:
             st.error(f"Erreur : {res['error']}")
             continue
 
-        with st.expander(f"📊 ANALYSE : {res['name']}", expanded=True):
+        with st.expander(f"📊 ANALYSE TERMINÉE : {res['name']}", expanded=True):
             bg_grad = "linear-gradient(135deg, #1e3a8a, #581c87)" if res['conf'] > 70 else "linear-gradient(135deg, #334155, #0f172a)"
             st.markdown(f"""
                 <div class="final-decision-box" style="background:{bg_grad};">
@@ -260,8 +276,6 @@ if uploaded_files:
                               data={'chat_id': CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'})
             except Exception as e:
                 st.warning(f"Telegram non envoyé : {e}")
-
-        pbar.progress((i + 1) / len(uploaded_files))
 
 if st.sidebar.button("Sweep Cache"):
     st.cache_data.clear()
