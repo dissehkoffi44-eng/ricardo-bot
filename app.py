@@ -11,8 +11,8 @@ import gc
 from scipy.signal import butter, lfilter
 
 # --- CONFIGURATION SÉCURISÉE ---
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "7751365982:AAFLbeRoPsDx5OyIOlsgHcGKpI12hopzCYo")
-CHAT_ID = st.secrets.get("CHAT_ID", "-1003602454394")
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
+CHAT_ID = st.secrets.get("CHAT_ID")
 
 # --- CONFIGURATION PAGE ---
 st.set_page_config(page_title="RCDJ228 M3 PRO", page_icon="🎧", layout="wide")
