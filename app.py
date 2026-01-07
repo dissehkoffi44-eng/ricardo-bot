@@ -214,7 +214,7 @@ st.title("🎧 RCDJ228 M1")
 uploaded_files = st.file_uploader("📂 Chargez vos fichiers audio", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
-    for f in uploaded_files:
+    for f in reversed(uploaded_files):
         # Éléments de progression dédiés à chaque fichier
         st.divider()
         status_text = st.empty()
