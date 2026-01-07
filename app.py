@@ -6,8 +6,6 @@ import plotly.express as px
 from collections import Counter
 import io
 import streamlit.components.v1 as components
-import requests
-from scipy.signal import butter, lfilter
 
 # --- CONFIGURATION SÉCURISÉE ---
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
@@ -42,26 +40,15 @@ def apply_perceptual_filter(y, sr):
     return librosa.istft(S * librosa.db_to_amplitude(a_weights))
 
 def get_humanized_chroma(y, sr, tuning):
-    """Extraction avec correction de l'erreur chroma_cens"""
     y_harm = librosa.effects.harmonic(y, margin=6.0)
-    
-    # 1. Chroma CQT Global (Harmonie générale)
     chroma_map = librosa.feature.chroma_cqt(y=y_harm, sr=sr, tuning=tuning, n_chroma=12)
-    
-    # 2. Focus Basse (C1-C3) utilisant chroma_cens directement sur le signal
-    # On spécifie fmin pour cibler les fondamentales
     low_cens = librosa.feature.chroma_cens(y=y_harm, sr=sr, tuning=tuning, fmin=librosa.note_to_hz('C1'), n_octaves=2)
     
-    # 3. Fusion Cognitive (70% global, 30% basses)
-    # On s'assure que les dimensions correspondent (interpolation si nécessaire)
     if low_cens.shape[1] != chroma_map.shape[1]:
         low_cens = librosa.util.fix_length(low_cens, size=chroma_map.shape[1], axis=1)
         
     combined = (chroma_map * 0.7) + (low_cens * 0.3)
-    
-    # 4. Lissage temporel (Mémoire échoïque)
     chroma_smooth = librosa.decompose.nn_filter(combined, aggregate=np.median, metric='cosine')
-    
     return np.power(chroma_smooth, 3.0)
 
 def solve_key_logic(chroma_vector):
@@ -111,39 +98,62 @@ def play_chord_button(note_mode, uid):
     }};
     </script>""", height=110)
 
-def process_audio(file_bytes, file_name, progress_bar, status_text):
+def process_audio(file_buffer, file_name, progress_bar, status_text):
     try:
-        y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
-        y = librosa.util.normalize(y)
-        tuning = librosa.estimate_tuning(y=y, sr=sr)
-        y_filt = apply_perceptual_filter(y, sr)
+        # 1. Infos de base sans chargement complet
+        duration = librosa.get_duration(path=file_buffer)
+        sr = 22050
         
-        step, timeline, votes = 8, [], Counter()
-        duration = int(librosa.get_duration(y=y))
-        segments = list(range(0, duration - step, step // 2))
+        # 2. Estimation du tuning sur un échantillon (économie RAM)
+        y_tuning, _ = librosa.load(file_buffer, sr=sr, offset=max(0, duration/2 - 10), duration=20)
+        tuning = librosa.estimate_tuning(y=y_tuning, sr=sr)
+        del y_tuning
 
+        step, timeline, votes = 8, [], Counter()
+        segments = list(range(0, int(duration) - step, step // 2))
+
+        # 3. Traitement STREAMING par segment
+        all_chromas = []
         for idx, start in enumerate(segments):
             progress_bar.progress((idx + 1) / len(segments))
             status_text.text(f"Psych-Analysis : {int((idx+1)/len(segments)*100)}%")
             
-            y_seg = y_filt[int(start*sr):int((start+step)*sr)]
-            if np.max(np.abs(y_seg)) < 0.02: continue 
+            # Chargement partiel uniquement
+            y_seg, _ = librosa.load(file_buffer, sr=sr, offset=start, duration=step)
+            
+            if np.max(np.abs(y_seg)) < 0.02: 
+                del y_seg
+                continue 
 
-            chroma_human = get_humanized_chroma(y_seg, sr, tuning)
-            res = solve_key_logic(np.mean(chroma_human, axis=1))
+            y_seg_filt = apply_perceptual_filter(y_seg, sr)
+            chroma_human = get_humanized_chroma(y_seg_filt, sr, tuning)
+            
+            # Calcul de la clé du segment
+            mean_chroma_seg = np.mean(chroma_human, axis=1)
+            all_chromas.append(mean_chroma_seg)
+            
+            res = solve_key_logic(mean_chroma_seg)
             votes[res['key']] += (res['score'] ** 3)
             timeline.append({"Temps": start, "Note": res['key'], "Conf": round(res['score']*100, 1)})
+            
+            del y_seg, y_seg_filt
 
+        # 4. Décision Finale
         final_key = votes.most_common(1)[0][0]
-        full_chroma = np.mean(get_humanized_chroma(y_filt, sr, tuning), axis=1)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        full_chroma_avg = np.mean(all_chromas, axis=0)
+        
+        # Tempo sur version allégée
+        file_buffer.seek(0)
+        y_light, sr_light = librosa.load(file_buffer, sr=11025)
+        tempo, _ = librosa.beat.beat_track(y=y_light, sr=sr_light)
+        del y_light
 
         return {
             "name": file_name, "tempo": int(float(tempo)), "key": final_key,
             "camelot": (BASE_CAMELOT_MINOR if 'minor' in final_key else BASE_CAMELOT_MAJOR).get(final_key.split(' ')[0], "??"),
-            "conf": int(pd.DataFrame(timeline)['Conf'].mean()),
-            "consonance": get_consonance_score(full_chroma, final_key),
-            "details": solve_key_logic(full_chroma)['details'],
+            "conf": int(pd.DataFrame(timeline)['Conf'].mean()) if timeline else 0,
+            "consonance": get_consonance_score(full_chroma_avg, final_key),
+            "details": solve_key_logic(full_chroma_avg)['details'],
             "timeline": timeline
         }
     except Exception as e: return {"error": str(e)}
@@ -158,7 +168,9 @@ if uploaded_files:
     for f in reversed(uploaded_files):
         st.divider()
         pbar = st.progress(0); stext = st.empty()
-        res = process_audio(f.read(), f.name, pbar, stext)
+        
+        # Passage direct de 'f' (UploadedFile) qui est déjà un buffer
+        res = process_audio(f, f.name, pbar, stext)
         pbar.empty(); stext.empty()
 
         if "error" in res:
