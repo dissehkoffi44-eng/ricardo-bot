@@ -70,15 +70,12 @@ def apply_perceptual_filter(y, sr):
     return lfilter(b, a, y)
 
 def get_enhanced_chroma(y, sr, tuning):
-    # On force l'extraction harmonique à nouveau sur le segment pour plus de pureté
     y_harm = librosa.effects.harmonic(y, margin=8.0)
-    
     chroma = librosa.feature.chroma_cqt(
         y=y_harm, sr=sr, tuning=tuning, 
         n_chroma=12, bins_per_octave=36, 
         fmin=librosa.note_to_hz('C2')
     )
-    
     chroma = librosa.decompose.nn_filter(chroma, aggregate=np.median, metric='cosine')
     return np.power(chroma, 3.0) 
 
@@ -139,9 +136,6 @@ def play_chord_button(note_mode, uid):
 def process_audio(file_bytes, file_name):
     try:
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
-        
-        # --- NOUVEAUTÉ : SÉPARATION DES SOURCES HARMONIQUES ---
-        # On extrait la mélodie (y_harm) et on ignore les percussions (y_perc)
         y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
         
         tuning = librosa.estimate_tuning(y=y_harm, sr=sr)
@@ -158,18 +152,15 @@ def process_audio(file_bytes, file_name):
             chroma = get_enhanced_chroma(y_seg, sr, tuning)
             res = solve_key_logic(np.mean(chroma, axis=1))
             
-            # Pondération cubique pour une certitude extrême sur les segments clairs
             weight = (res['score'] ** 3) * 100
             votes[res['key']] += weight
             timeline.append({"Temps": start, "Note": res['key'], "Conf": round(res['score']*100, 1)})
 
         if not timeline: return {"error": "Audio trop court ou silencieux"}
 
-        # Logique de décision par marge de sécurité
         top_two = votes.most_common(2)
         final_key = top_two[0][0]
         
-        # Analyse globale sur signal harmonique nettoyé
         full_chroma = get_enhanced_chroma(y_harm, sr, tuning)
         final_details_res = solve_key_logic(np.mean(full_chroma, axis=1))
 
@@ -179,13 +170,24 @@ def process_audio(file_bytes, file_name):
                 final_key = final_details_res['details']['bellman']
 
         avg_conf = int(pd.DataFrame(timeline)[pd.DataFrame(timeline)['Note'] == final_key]['Conf'].mean())
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr) # Tempo calculé sur signal original pour précision rythmique
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
         
-        # Image pour Telegram
+        # --- ENRICHISSEMENT GRAPHIQUE POUR TELEGRAM ---
         df_tl = pd.DataFrame(timeline)
-        fig = px.line(df_tl, x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark")
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=0,r=0,t=30,b=0))
-        img_bytes = fig.to_image(format="png", width=1000, height=450)
+        fig = px.line(df_tl, x="Temps", y="Note", markers=True, 
+                      category_orders={"Note": NOTES_ORDER}, 
+                      template="plotly_dark",
+                      title=f"Stabilité: {file_name}")
+        
+        fig.update_layout(
+            paper_bgcolor='#0e1117', 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            margin=dict(l=50, r=20, t=60, b=50),
+            xaxis=dict(gridcolor='#1e293b', title="Temps (sec)"),
+            yaxis=dict(gridcolor='#1e293b', title="Note / Tonalité"),
+            font=dict(color="white")
+        )
+        img_bytes = fig.to_image(format="png", width=1200, height=600)
 
         output = {
             "name": file_name, "tempo": int(float(tempo)), "tuning": round(tuning, 2),
@@ -227,17 +229,30 @@ if uploaded_files:
                 st.markdown(f'<div class="metric-container"><div class="metric-label">Tempo</div><div class="value-custom">{res["tempo"]} BPM</div></div>', unsafe_allow_html=True)
             with c2: play_chord_button(res['key'], f.name)
             with c3: 
-                tags_html = "".join([f"<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
+                tags_html = "".join([f<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
                 st.markdown(f'<div class="metric-container"><div class="metric-label">Stabilité Algorithmique</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
             
             st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
 
-            # --- RAPPORT TELEGRAM ---
+            # --- RAPPORT TELEGRAM ENRICHI ---
             try:
-                caption = (f"🎧 *RAPPORT M3 PRO (HPSS Integration)*\n"
-                           f"📂 `{res['name']}`\n"
-                           f"🎹 *{res['key']}* ({res['camelot']})\n"
-                           f"⏱ {res['tempo']} BPM | 🎯 Confiance: `{res['conf']}%`")
+                caption = (
+                    f"🎧 *RAPPORT D'ANALYSE RCDJ228 PRO*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📁 *Fichier:* `{res['name']}`\n"
+                    f"🎹 *Key Principale:* `{res['key']}`\n"
+                    f"🎼 *Camelot:* `{res['camelot']}`\n"
+                    f"⏱ *Tempo:* `{res['tempo']} BPM`\n"
+                    f"🎯 *Confiance:* `{res['conf']}%`\n"
+                    f"🎸 *Tuning:* `{res['tuning']} Hz`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔬 *Détails Algorithmes:*\n"
+                    f"• Bellman: `{res['details']['bellman']}`\n"
+                    f"• Krumhansl: `{res['details']['krumhansl']}`\n"
+                    f"• Temperley: `{res['details']['temperley']}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ _Analyse effectuée par M3 Pro Engine_"
+                )
                 
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
                               files={'photo': res['plot']}, 
