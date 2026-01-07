@@ -22,7 +22,6 @@ BASE_CAMELOT_MAJOR = {'B':'1B','F#':'2B','Gb':'2B','Db':'3B','C#':'3B','Ab':'4B'
 NOTES_LIST = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 NOTES_ORDER = [f"{n} {m}" for n in NOTES_LIST for m in ['major', 'minor']]
 
-# Profils basés sur la cognition humaine (Krumhansl-Kessler)
 PROFILES = {
     "krumhansl": {
         "major": [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
@@ -34,59 +33,33 @@ PROFILES = {
     }
 }
 
-# --- STYLES CSS ---
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; color: white; }
-    .metric-container { 
-        background: #1a1c24; padding: 15px; border-radius: 15px; border: 1px solid #333; 
-        text-align: center; min-height: 110px; display: flex; flex-direction: column; justify-content: center;
-    }
-    .value-custom { font-size: 1.6em; font-weight: 800; color: #FFFFFF; }
-    .final-decision-box { 
-        padding: 40px; border-radius: 25px; text-align: center; margin: 15px 0; 
-        border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-    }
-    .profile-tag { 
-        background: rgba(99, 102, 241, 0.1); color: #a5b4fc; padding: 3px 10px; 
-        border-radius: 6px; font-size: 0.75em; margin: 2px; display: inline-block;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
 # --- FONCTIONS TECHNIQUES ---
 
 def apply_perceptual_filter(y, sr):
-    """Simule la courbe de réponse de l'oreille (Pondération A)"""
     S = np.abs(librosa.stft(y))
     freqs = librosa.fft_frequencies(sr=sr)
     a_weights = librosa.perceptual_weighting(S**2, freqs)
     return librosa.istft(S * librosa.db_to_amplitude(a_weights))
 
 def get_humanized_chroma(y, sr, tuning):
-    """
-    Implémente les points 1 à 4 :
-    1. Pondération spectrale (focale 150-800Hz)
-    2. Mémoire échoïque (Lissage temporel)
-    3. Hiérarchie Basse vs Médiums
-    """
-    # Extraction de la composante harmonique pure
+    """Extraction avec correction de l'erreur chroma_cens"""
     y_harm = librosa.effects.harmonic(y, margin=6.0)
     
-    # Chroma CQT global (Harmonie)
+    # 1. Chroma CQT Global (Harmonie générale)
     chroma_map = librosa.feature.chroma_cqt(y=y_harm, sr=sr, tuning=tuning, n_chroma=12)
     
-    # Analyse spécifique de la Basse (Fondamentales C1-C3)
-    # Correction : Utilisation de n_octaves pour éviter l'erreur fmax de chroma_cens
-    low_chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr, tuning=tuning, 
-                                            fmin=librosa.note_to_hz('C1'), 
-                                            n_octaves=2)
-    low_cens = librosa.feature.chroma_cens(chroma=low_chroma)
+    # 2. Focus Basse (C1-C3) utilisant chroma_cens directement sur le signal
+    # On spécifie fmin pour cibler les fondamentales
+    low_cens = librosa.feature.chroma_cens(y=y_harm, sr=sr, tuning=tuning, fmin=librosa.note_to_hz('C1'), n_octaves=2)
     
-    # Fusion Cognitive : Priorité à la basse (30%) pour définir la tonique
+    # 3. Fusion Cognitive (70% global, 30% basses)
+    # On s'assure que les dimensions correspondent (interpolation si nécessaire)
+    if low_cens.shape[1] != chroma_map.shape[1]:
+        low_cens = librosa.util.fix_length(low_cens, size=chroma_map.shape[1], axis=1)
+        
     combined = (chroma_map * 0.7) + (low_cens * 0.3)
     
-    # Lissage par médiane (Mémoire à court terme)
+    # 4. Lissage temporel (Mémoire échoïque)
     chroma_smooth = librosa.decompose.nn_filter(combined, aggregate=np.median, metric='cosine')
     
     return np.power(chroma_smooth, 3.0)
@@ -94,19 +67,14 @@ def get_humanized_chroma(y, sr, tuning):
 def solve_key_logic(chroma_vector):
     best_score, best_key, winners = -1, "", {}
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
-    
     for p_name, p_data in PROFILES.items():
         p_max, p_note = -1, ""
         for mode in ["major", "minor"]:
             for i in range(12):
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
-                if score > p_max: 
-                    p_max, p_note = score, f"{NOTES_LIST[i]} {mode}"
-                
-                # Boost pour le profil Krumhansl (le plus fidèle à l'oreille)
-                t_score = score * 1.15 if p_name == "krumhansl" else score
-                if t_score > best_score: 
-                    best_score, best_key = t_score, f"{NOTES_LIST[i]} {mode}"
+                if score > p_max: p_max, p_note = score, f"{NOTES_LIST[i]} {mode}"
+                t_score = score * 1.2 if p_name == "krumhansl" else score
+                if t_score > best_score: best_score, best_key = t_score, f"{NOTES_LIST[i]} {mode}"
         winners[p_name] = p_note
     return {"key": best_key, "score": best_score, "details": winners}
 
@@ -124,7 +92,7 @@ def get_consonance_score(chroma_vec, key_str):
 def play_chord_button(note_mode, uid):
     if " " not in note_mode: return ""
     n, m = note_mode.split(' ')
-    js_id = f"btn_{uid}".replace(".","").replace("#","s").replace("-","")
+    js_id = f"btn_{uid}".replace(".","").replace("#","s").replace(" ","")
     return components.html(f"""
     <button id="{js_id}" style="background:linear-gradient(90deg, #6366F1, #8B5CF6); color:white; border:none; border-radius:12px; padding:15px; cursor:pointer; width:100%; font-weight:bold;">
         🔊 TESTER {n} {m.upper()}
@@ -143,8 +111,6 @@ def play_chord_button(note_mode, uid):
     }};
     </script>""", height=110)
 
-# --- MOTEUR D'ANALYSE ---
-
 def process_audio(file_bytes, file_name, progress_bar, status_text):
     try:
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
@@ -152,8 +118,7 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
         tuning = librosa.estimate_tuning(y=y, sr=sr)
         y_filt = apply_perceptual_filter(y, sr)
         
-        # Fenêtre glissante (Point 2 : Mémoire échoïque)
-        step, timeline, votes = 6, [], Counter()
+        step, timeline, votes = 8, [], Counter()
         duration = int(librosa.get_duration(y=y))
         segments = list(range(0, duration - step, step // 2))
 
@@ -166,7 +131,6 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
 
             chroma_human = get_humanized_chroma(y_seg, sr, tuning)
             res = solve_key_logic(np.mean(chroma_human, axis=1))
-            
             votes[res['key']] += (res['score'] ** 3)
             timeline.append({"Temps": start, "Note": res['key'], "Conf": round(res['score']*100, 1)})
 
@@ -184,12 +148,11 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
         }
     except Exception as e: return {"error": str(e)}
 
-# --- UI STREAMLIT ---
+# --- UI ---
 
 st.title("🎧 RCDJ228 M1 PRO - Psycho-Engine")
-st.caption("Intelligence Harmonique basée sur la Perception Auditive Humaine")
 
-uploaded_files = st.file_uploader("📂 Déposer vos fichiers audio", type=['mp3','wav','flac'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Audio files", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
     for f in reversed(uploaded_files):
@@ -199,50 +162,26 @@ if uploaded_files:
         pbar.empty(); stext.empty()
 
         if "error" in res:
-            st.error(f"Erreur : {res['error']}"); continue
+            st.error(res['error']); continue
 
-        with st.expander(f"💎 ANALYSE DÉTAILLÉE : {res['name']}", expanded=True):
+        with st.expander(f"💎 ANALYSE : {res['name']}", expanded=True):
             potential_keys = list(set([res['key']] + list(res['details'].values())))
-            sel_key = st.selectbox(f"Ajustement manuel ({f.name})", potential_keys, 
-                                   index=potential_keys.index(res['key']), 
-                                   key=f"sel_{f.name}")
+            sel_key = st.selectbox(f"Clé ({f.name})", potential_keys, index=potential_keys.index(res['key']), key=f"s_{f.name}")
             
             is_minor = 'minor' in sel_key
             cur_cam = (BASE_CAMELOT_MINOR if is_minor else BASE_CAMELOT_MAJOR).get(sel_key.split(' ')[0], "??")
             
-            bg_gradient = "linear-gradient(135deg, #0f172a, #581c87)" if is_minor else "linear-gradient(135deg, #1e3a8a, #0369a1)"
             st.markdown(f'''
-                <div class="final-decision-box" style="background:{bg_gradient}; color: white;">
-                    <h1 style="color: white; margin:0;">{sel_key.upper()}</h1>
-                    <p style="color: rgba(255,255,255,0.8); font-size:1.2em;">ROUE CAMELOT : {cur_cam} | FIABILITÉ : {res["conf"]}%</p>
+                <div class="final-decision-box" style="background:linear-gradient(135deg, #1e3a8a, #581c87); padding:40px; border-radius:25px; text-align:center; color:white;">
+                    <h1 style="color:white;">{sel_key}</h1>
+                    <p>CAMELOT: {cur_cam} | FIABILITÉ: {res["conf"]}%</p>
                 </div>
             ''', unsafe_allow_html=True)
 
             c1, c2, c3, c4 = st.columns(4)
             with c1: st.markdown(f'<div class="metric-container">Tempo<br><span class="value-custom">{res["tempo"]} BPM</span></div>', unsafe_allow_html=True)
             with c2: play_chord_button(sel_key, f"btn_{f.name}")
-            with c3: st.markdown(f'<div class="metric-container">Pureté Tonale<br><span class="value-custom">{res["consonance"]}%</span></div>', unsafe_allow_html=True)
-            with c4: 
-                tags = "".join([f"<span class='profile-tag'>{v}</span>" for v in res['details'].values()])
-                st.markdown(f'<div class="metric-container">Profils Cognitifs<br>{tags}</div>', unsafe_allow_html=True)
+            with c3: st.markdown(f'<div class="metric-container">Consonance<br><span class="value-custom">{res["consonance"]}%</span></div>', unsafe_allow_html=True)
+            with c4: st.markdown(f'<div class="metric-container">Modèles<br>{", ".join(res["details"].values())}</div>', unsafe_allow_html=True)
 
-            # Visualisation du flux tonal
-            df_tl = pd.DataFrame(res['timeline'])
-            fig = px.line(df_tl, x="Temps", y="Note", markers=True, 
-                         title="Stabilité de la clé sur la durée du morceau",
-                         category_orders={"Note": NOTES_ORDER}, template="plotly_dark")
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
-
-            if st.button(f"🚀 Rapport Telegram", key=f"tele_{f.name}"):
-                if TELEGRAM_TOKEN and CHAT_ID:
-                    try:
-                        msg = f"🎧 *PSYCHO-ENGINE REPORT*\n📁 `{res['name']}`\n🎹 `{sel_key}` ({cur_cam})\n⏱ `{res['tempo']} BPM`"
-                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                                      data={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'})
-                        st.success("Envoyé !")
-                    except: st.error("Erreur Telegram")
-
-if st.sidebar.button("Nettoyer le Cache"):
-    st.cache_data.clear()
-    st.rerun()
+            st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
