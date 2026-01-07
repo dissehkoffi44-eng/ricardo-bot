@@ -65,19 +65,22 @@ st.markdown("""
 
 def apply_perceptual_filter(y, sr):
     nyq = 0.5 * sr
-    low, high = 100 / nyq, 3000 / nyq # Zone harmonique pure
+    low, high = 100 / nyq, 3000 / nyq 
     b, a = butter(4, [low, high], btype='band')
     return lfilter(b, a, y)
 
 def get_enhanced_chroma(y, sr, tuning):
-    y_harm = librosa.effects.harmonic(y, margin=6.0)
+    # On force l'extraction harmonique à nouveau sur le segment pour plus de pureté
+    y_harm = librosa.effects.harmonic(y, margin=8.0)
+    
     chroma = librosa.feature.chroma_cqt(
         y=y_harm, sr=sr, tuning=tuning, 
         n_chroma=12, bins_per_octave=36, 
         fmin=librosa.note_to_hz('C2')
     )
+    
     chroma = librosa.decompose.nn_filter(chroma, aggregate=np.median, metric='cosine')
-    return np.power(chroma, 2.0)
+    return np.power(chroma, 3.0) 
 
 def solve_key_logic(chroma_vector):
     best_score, best_key = -1, ""
@@ -93,7 +96,6 @@ def solve_key_logic(chroma_vector):
                 if score > p_max:
                     p_max, p_note = score, note_str
                 
-                # Boost Bellman pour la précision Pro
                 total_score = score * 1.25 if p_name == "bellman" else score
                 if total_score > best_score:
                     best_score, best_key = total_score, note_str
@@ -137,34 +139,48 @@ def play_chord_button(note_mode, uid):
 def process_audio(file_bytes, file_name):
     try:
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
-        tuning = librosa.estimate_tuning(y=y, sr=sr)
-        duration = librosa.get_duration(y=y, sr=sr)
-        y_filt = apply_perceptual_filter(y, sr)
+        
+        # --- NOUVEAUTÉ : SÉPARATION DES SOURCES HARMONIQUES ---
+        # On extrait la mélodie (y_harm) et on ignore les percussions (y_perc)
+        y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
+        
+        tuning = librosa.estimate_tuning(y=y_harm, sr=sr)
+        duration = librosa.get_duration(y=y_harm, sr=sr)
+        y_filt = apply_perceptual_filter(y_harm, sr)
         
         step, timeline = 8, []
         votes = Counter()
         
         for start in range(0, int(duration) - step, step):
             y_seg = y_filt[int(start*sr):int((start+step)*sr)]
-            if np.max(np.abs(y_seg)) < 0.01: continue 
+            if np.max(np.abs(y_seg)) < 0.015: continue 
             
             chroma = get_enhanced_chroma(y_seg, sr, tuning)
             res = solve_key_logic(np.mean(chroma, axis=1))
             
-            weight = int(res['score'] * 100)
+            # Pondération cubique pour une certitude extrême sur les segments clairs
+            weight = (res['score'] ** 3) * 100
             votes[res['key']] += weight
             timeline.append({"Temps": start, "Note": res['key'], "Conf": round(res['score']*100, 1)})
 
         if not timeline: return {"error": "Audio trop court ou silencieux"}
 
-        final_key = votes.most_common(1)[0][0]
-        avg_conf = int(pd.DataFrame(timeline)[pd.DataFrame(timeline)['Note'] == final_key]['Conf'].mean())
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        # Logique de décision par marge de sécurité
+        top_two = votes.most_common(2)
+        final_key = top_two[0][0]
         
-        # Analyse globale pour détails
-        full_chroma = get_enhanced_chroma(y, sr, tuning)
-        final_details = solve_key_logic(np.mean(full_chroma, axis=1))
+        # Analyse globale sur signal harmonique nettoyé
+        full_chroma = get_enhanced_chroma(y_harm, sr, tuning)
+        final_details_res = solve_key_logic(np.mean(full_chroma, axis=1))
 
+        if len(top_two) > 1:
+            margin = (top_two[0][1] - top_two[1][1]) / top_two[0][1]
+            if margin < 0.15:
+                final_key = final_details_res['details']['bellman']
+
+        avg_conf = int(pd.DataFrame(timeline)[pd.DataFrame(timeline)['Note'] == final_key]['Conf'].mean())
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr) # Tempo calculé sur signal original pour précision rythmique
+        
         # Image pour Telegram
         df_tl = pd.DataFrame(timeline)
         fig = px.line(df_tl, x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark")
@@ -174,9 +190,9 @@ def process_audio(file_bytes, file_name):
         output = {
             "name": file_name, "tempo": int(float(tempo)), "tuning": round(tuning, 2),
             "key": final_key, "camelot": get_camelot(final_key), "conf": avg_conf,
-            "details": final_details['details'], "timeline": timeline, "plot": img_bytes
+            "details": final_details_res['details'], "timeline": timeline, "plot": img_bytes
         }
-        del y, y_filt, full_chroma; gc.collect()
+        del y, y_harm, y_perc, y_filt, full_chroma; gc.collect()
         return output
     except Exception as e:
         return {"error": str(e)}
@@ -212,13 +228,13 @@ if uploaded_files:
             with c2: play_chord_button(res['key'], f.name)
             with c3: 
                 tags_html = "".join([f"<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
-                st.markdown(f'<div class="metric-container"><div class="metric-label">Stabilité</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-container"><div class="metric-label">Stabilité Algorithmique</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
             
             st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
 
-            # --- RAPPORT TELEGRAM COMPLET ---
+            # --- RAPPORT TELEGRAM ---
             try:
-                caption = (f"🎧 *RAPPORT M3 PRO*\n"
+                caption = (f"🎧 *RAPPORT M3 PRO (HPSS Integration)*\n"
                            f"📂 `{res['name']}`\n"
                            f"🎹 *{res['key']}* ({res['camelot']})\n"
                            f"⏱ {res['tempo']} BPM | 🎯 Confiance: `{res['conf']}%`")
