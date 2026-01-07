@@ -15,7 +15,7 @@ TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
 CHAT_ID = st.secrets.get("CHAT_ID")
 
 # --- CONFIGURATION PAGE ---
-st.set_page_config(page_title="RCDJ228 M3 PRO", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="RCDJ228 M1", page_icon="🎧", layout="wide")
 
 # --- CONSTANTES ET PROFILS HARMONIQUES ---
 BASE_CAMELOT_MINOR = {'Ab':'1A','G#':'1A','Eb':'2A','D#':'2A','Bb':'3A','A#':'3A','F':'4A','C':'5A','G':'6A','D':'7A','A':'8A','E':'9A','B':'10A','F#':'11A','Gb':'11A','Db':'12A','C#':'12A'}
@@ -202,7 +202,7 @@ def process_audio(file_bytes, file_name):
 
 # --- INTERFACE ---
 
-st.title("🎧 RCDJ228 M3 - VERSION PRO FINALE")
+st.title("🎧 RCDJ228 M1")
 uploaded_files = st.file_uploader("📂 Chargez vos fichiers audio", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
@@ -238,7 +238,7 @@ if uploaded_files:
             # --- RAPPORT TELEGRAM ENRICHI ---
             try:
                 caption = (
-                    f"🎧 *RAPPORT D'ANALYSE RCDJ228 PRO*\n"
+                    f"🎧 *RAPPORT D'ANALYSE RCDJ228 M1*\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"📁 *Fichier:* `{res['name']}`\n"
                     f"🎹 *Key Principale:* `{res['key']}`\n"
