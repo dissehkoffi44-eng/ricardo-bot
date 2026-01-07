@@ -50,6 +50,10 @@ st.markdown("""
     .final-decision-box { 
         padding: 40px; border-radius: 25px; text-align: center; margin: 15px 0; 
         border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        color: white !important;
+    }
+    .final-decision-box h1, .final-decision-box p {
+        color: white !important;
     }
     .profile-tag { 
         background: rgba(99, 102, 241, 0.1); color: #a5b4fc; padding: 3px 10px; 
@@ -182,15 +186,13 @@ if uploaded_files:
             st.error(res['error']); continue
 
         with st.expander(f"💎 ANALYSE : {res['name']}", expanded=True):
-            # Correction de l'erreur Duplicate ID : on ajoute un identifiant unique à chaque widget
             potential_keys = list(set([res['key']] + list(res['details'].values())))
-            # Ajout d'une clé unique pour le selectbox
             sel_key = st.selectbox(f"Ajustement ({f.name})", potential_keys, 
                                    index=potential_keys.index(res['key']), 
                                    key=f"select_{f.name}")
             
             cur_cam = get_camelot(sel_key)
-            st.markdown(f'<div class="final-decision-box" style="background:linear-gradient(135deg, #1e3a8a, #581c87);"><h1>{sel_key}</h1><p>CAMELOT: {cur_cam} | FIABILITÉ: {res["conf"]}%</p></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="final-decision-box" style="background:linear-gradient(135deg, #1e3a8a, #581c87); color: white;"><h1 style="color: white;">{sel_key}</h1><p style="color: white;">CAMELOT: {cur_cam} | FIABILITÉ: {res["conf"]}%</p></div>', unsafe_allow_html=True)
 
             c1, c2, c3, c4 = st.columns(4)
             with c1: st.markdown(f'<div class="metric-container">Tempo<br><span class="value-custom">{res["tempo"]} BPM</span></div>', unsafe_allow_html=True)
@@ -202,7 +204,6 @@ if uploaded_files:
 
             st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
 
-            # Correction de l'erreur Duplicate ID : ajout d'une key unique au bouton Telegram
             if st.button(f"🚀 Rapport Telegram : {res['name']}", key=f"tele_{f.name}"):
                 try:
                     cap = f"🎧 *RCDJ228 REPORT*\n📁 `{res['name']}`\n🎹 `{sel_key}` ({cur_cam})\n⏱ `{res['tempo']} BPM`"
