@@ -268,7 +268,7 @@ if uploaded_files:
                     f"• Krumhansl: `{res['details']['krumhansl']}`\n"
                     f"• Temperley: `{res['details']['temperley']}`\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ _Analyse effectuée par M3 Pro Engine_"
+                    f"⚡ _Analyse effectuée par RCDJ228 M1 Pro Engine_"
                 )
                 
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
