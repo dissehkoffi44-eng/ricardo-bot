@@ -15,7 +15,7 @@ TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
 CHAT_ID = st.secrets.get("CHAT_ID")
 
 # --- CONFIGURATION PAGE ---
-st.set_page_config(page_title="RCDJ228 M1", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="RCDJ228 M1 Pro", page_icon="🎧", layout="wide")
 
 # --- CONSTANTES ET PROFILS HARMONIQUES ---
 BASE_CAMELOT_MINOR = {'Ab':'1A','G#':'1A','Eb':'2A','D#':'2A','Bb':'3A','A#':'3A','F':'4A','C':'5A','G':'6A','D':'7A','A':'8A','E':'9A','B':'10A','F#':'11A','Gb':'11A','Db':'12A','C#':'12A'}
@@ -32,7 +32,7 @@ PROFILES = {
         "major": [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0],
         "minor": [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0]
     },
-    "bellman": {
+    "bellman": { # Profil très axé sur la perception humaine réelle
         "major": [16.8, 0.86, 12.95, 1.41, 13.49, 11.93, 1.25, 16.74, 1.56, 12.81, 1.89, 12.44],
         "minor": [18.16, 0.69, 12.99, 13.34, 1.07, 11.15, 1.38, 17.2, 13.62, 1.27, 12.79, 2.4]
     }
@@ -64,10 +64,19 @@ st.markdown("""
 # --- MOTEUR DE TRAITEMENT ---
 
 def apply_perceptual_filter(y, sr):
+    """Applique une pondération A-weighting pour simuler l'oreille humaine"""
+    # 1. Filtre passe-bande standard
     nyq = 0.5 * sr
-    low, high = 100 / nyq, 3000 / nyq 
+    low, high = 150 / nyq, 4000 / nyq 
     b, a = butter(4, [low, high], btype='band')
-    return lfilter(b, a, y)
+    y_filt = lfilter(b, a, y)
+    
+    # 2. Pondération fréquentielle (A-Weighting)
+    S = np.abs(librosa.stft(y_filt))
+    freqs = librosa.fft_frequencies(sr=sr)
+    a_weights = librosa.perceptual_weighting(S**2, freqs)
+    S_weighted = S * librosa.db_to_amplitude(a_weights)
+    return librosa.istft(S_weighted)
 
 def get_enhanced_chroma(y, sr, tuning):
     y_harm = librosa.effects.harmonic(y, margin=8.0)
@@ -93,6 +102,7 @@ def solve_key_logic(chroma_vector):
                 if score > p_max:
                     p_max, p_note = score, note_str
                 
+                # Pondération Bellman (+25%) car il simule mieux l'oreille
                 total_score = score * 1.25 if p_name == "bellman" else score
                 if total_score > best_score:
                     best_score, best_key = total_score, note_str
@@ -134,7 +144,6 @@ def play_chord_button(note_mode, uid):
 
 def process_audio(file_bytes, file_name, progress_bar, status_text):
     try:
-        # Initialisation progression
         status_text.text(f"Chargement de {file_name}...")
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
         y = librosa.util.normalize(y)
@@ -142,19 +151,19 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
         y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
         tuning = librosa.estimate_tuning(y=y_harm, sr=sr)
         duration = librosa.get_duration(y=y_harm, sr=sr)
+        
+        # Application du filtre psychoacoustique
         y_filt = apply_perceptual_filter(y_harm, sr)
         
         step, timeline = 8, []
         votes = Counter()
-        
         segments = list(range(0, int(duration) - step, step))
         total_steps = len(segments)
 
         for idx, start in enumerate(segments):
-            # Mise à jour du pourcentage 1-100%
             percent = int(((idx + 1) / total_steps) * 100)
             progress_bar.progress(percent / 100)
-            status_text.text(f"Analyse de {file_name} : {percent}%")
+            status_text.text(f"Analyse Perceptive : {percent}%")
 
             y_seg = y_filt[int(start*sr):int((start+step)*sr)]
             if np.max(np.abs(y_seg)) < 0.015: continue 
@@ -162,6 +171,7 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
             chroma = get_enhanced_chroma(y_seg, sr, tuning)
             res = solve_key_logic(np.mean(chroma, axis=1))
             
+            # Pondération par score de confiance cubique pour favoriser la stabilité
             weight = (res['score'] ** 3) * 100
             votes[res['key']] += weight
             timeline.append({"Temps": start, "Note": res['key'], "Conf": round(res['score']*100, 1)})
@@ -174,6 +184,7 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
         full_chroma = get_enhanced_chroma(y_harm, sr, tuning)
         final_details_res = solve_key_logic(np.mean(full_chroma, axis=1))
 
+        # Arbitrage perceptuel : si le vote est serré, on favorise le profil Bellman (oreille humaine)
         if len(top_two) > 1:
             margin = (top_two[0][1] - top_two[1][1]) / top_two[0][1]
             if margin < 0.15:
@@ -182,20 +193,14 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
         avg_conf = int(pd.DataFrame(timeline)[pd.DataFrame(timeline)['Note'] == final_key]['Conf'].mean())
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
         
-        # --- GRAPHISME POUR TELEGRAM ---
+        # Graphique pour Telegram
         df_tl = pd.DataFrame(timeline)
         fig = px.line(df_tl, x="Temps", y="Note", markers=True, 
                       category_orders={"Note": NOTES_ORDER}, 
                       template="plotly_dark",
-                      title=f"Stabilité: {file_name}")
+                      title=f"Stabilité Perceptive: {file_name}")
         
-        fig.update_layout(
-            paper_bgcolor='#0e1117', plot_bgcolor='rgba(0,0,0,0)', 
-            margin=dict(l=60, r=20, t=60, b=60),
-            xaxis=dict(gridcolor='#1e293b', title="Temps (secondes)"),
-            yaxis=dict(gridcolor='#1e293b', title="Note Détectée"),
-            font=dict(family="Arial", size=12, color="white")
-        )
+        fig.update_layout(paper_bgcolor='#0e1117', plot_bgcolor='rgba(0,0,0,0)', font=dict(color="white"))
         img_bytes = fig.to_image(format="png", width=1200, height=600)
 
         output = {
@@ -210,12 +215,11 @@ def process_audio(file_bytes, file_name, progress_bar, status_text):
 
 # --- INTERFACE ---
 
-st.title("🎧 RCDJ228 M1")
+st.title("🎧 RCDJ228 M1 PRO - Analyse Perceptive")
 uploaded_files = st.file_uploader("📂 Chargez vos fichiers audio", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
     for f in reversed(uploaded_files):
-        # Éléments de progression dédiés à chaque fichier
         st.divider()
         status_text = st.empty()
         pbar = st.progress(0)
@@ -223,7 +227,6 @@ if uploaded_files:
         file_data = f.read()
         res = process_audio(file_data, f.name, pbar, status_text)
         
-        # Nettoyage après analyse
         status_text.empty()
         pbar.empty()
 
@@ -231,51 +234,65 @@ if uploaded_files:
             st.error(f"Erreur : {res['error']}")
             continue
 
-        with st.expander(f"📊 ANALYSE TERMINÉE : {res['name']}", expanded=True):
+        with st.expander(f"📊 RÉSULTAT : {res['name']}", expanded=True):
+            
+            # --- SYSTÈME DE VALIDATION HUMAINE ---
+            st.markdown("### 👂 Validation de l'oreille")
+            
+            # On propose les tonalités détectées par les différents algorithmes
+            potential_keys = list(set([res['key']] + list(res['details'].values())))
+            
+            col_val1, col_val2 = st.columns([2, 1])
+            with col_val1:
+                selected_key = st.selectbox(
+                    "Si la tonalité automatique semble fausse, choisissez la meilleure ici :", 
+                    potential_keys, 
+                    index=potential_keys.index(res['key'])
+                )
+            
+            # Mise à jour des données selon le choix utilisateur
+            current_key = selected_key
+            current_camelot = get_camelot(current_key)
+            
             bg_grad = "linear-gradient(135deg, #1e3a8a, #581c87)" if res['conf'] > 70 else "linear-gradient(135deg, #334155, #0f172a)"
+            
             st.markdown(f"""
                 <div class="final-decision-box" style="background:{bg_grad};">
-                    <p style="margin:0; opacity:0.8; letter-spacing:3px; font-weight:300;">TONALITÉ DÉTECTÉE</p>
-                    <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{res['key']}</h1>
-                    <p style="margin:0; font-size:1.5em;">CAMELOT: {res['camelot']} | CONFIANCE: {res['conf']}%</p>
+                    <p style="margin:0; opacity:0.8; letter-spacing:3px; font-weight:300;">TONALITÉ FINALE</p>
+                    <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{current_key}</h1>
+                    <p style="margin:0; font-size:1.5em;">CAMELOT: {current_camelot} | CONFIANCE: {res['conf']}%</p>
                 </div>
             """, unsafe_allow_html=True)
             
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1: 
                 st.markdown(f'<div class="metric-container"><div class="metric-label">Tempo</div><div class="value-custom">{res["tempo"]} BPM</div></div>', unsafe_allow_html=True)
-            with c2: play_chord_button(res['key'], f.name)
+            with c2: play_chord_button(current_key, f"{f.name}_main")
             with c3: 
                 tags_html = "".join([f"<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
-                st.markdown(f'<div class="metric-container"><div class="metric-label">Stabilité Algorithmique</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="metric-container"><div class="metric-label">Profils Algorithmiques</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
             
             st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
 
-            # --- RAPPORT TELEGRAM ENRICHI ---
-            try:
-                caption = (
-                    f"🎧 *RAPPORT D'ANALYSE RCDJ228 M1*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📁 *Fichier:* `{res['name']}`\n"
-                    f"🎹 *Key Principale:* `{res['key']}`\n"
-                    f"🎼 *Camelot:* `{res['camelot']}`\n"
-                    f"⏱ *Tempo:* `{res['tempo']} BPM`\n"
-                    f"🎯 *Confiance:* `{res['conf']}%`\n"
-                    f"🎸 *Tuning:* `{res['tuning']} Hz`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔬 *Détails Algorithmes:*\n"
-                    f"• Bellman: `{res['details']['bellman']}`\n"
-                    f"• Krumhansl: `{res['details']['krumhansl']}`\n"
-                    f"• Temperley: `{res['details']['temperley']}`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ _Analyse effectuée par RCDJ228 M1 Pro Engine_"
-                )
-                
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
-                              files={'photo': res['plot']}, 
-                              data={'chat_id': CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'})
-            except Exception as e:
-                st.warning(f"Telegram non envoyé : {e}")
+            # --- ENVOI TELEGRAM ---
+            if st.button(f"📤 Envoyer Rapport pour {current_key}"):
+                try:
+                    caption = (
+                        f"🎧 *RAPPORT RCDJ228 M1 PRO*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📁 *Fichier:* `{res['name']}`\n"
+                        f"🎹 *Key (Validée):* `{current_key}`\n"
+                        f"🎼 *Camelot:* `{current_camelot}`\n"
+                        f"⏱ *Tempo:* `{res['tempo']} BPM`\n"
+                        f"🎯 *Confiance:* `{res['conf']}%`\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚡ _Optimisé pour l'oreille humaine_"
+                    )
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
+                                  files={'photo': res['plot']}, 
+                                  data={'chat_id': CHAT_ID, 'caption': caption, 'parse_mode': 'Markdown'})
+                    st.success("Rapport envoyé !")
+                except: st.warning("Erreur d'envoi Telegram")
 
 if st.sidebar.button("Sweep Cache"):
     st.cache_data.clear()
