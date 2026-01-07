@@ -136,8 +136,10 @@ def play_chord_button(note_mode, uid):
 def process_audio(file_bytes, file_name):
     try:
         y, sr = librosa.load(io.BytesIO(file_bytes), sr=22050)
-        y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
+        # Normalisation pour une meilleure précision
+        y = librosa.util.normalize(y)
         
+        y_harm, y_perc = librosa.effects.hpss(y, margin=(1.5, 5.0))
         tuning = librosa.estimate_tuning(y=y_harm, sr=sr)
         duration = librosa.get_duration(y=y_harm, sr=sr)
         y_filt = apply_perceptual_filter(y_harm, sr)
@@ -172,7 +174,7 @@ def process_audio(file_bytes, file_name):
         avg_conf = int(pd.DataFrame(timeline)[pd.DataFrame(timeline)['Note'] == final_key]['Conf'].mean())
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
         
-        # --- ENRICHISSEMENT GRAPHIQUE POUR TELEGRAM ---
+        # --- GRAPHISME POUR TELEGRAM ---
         df_tl = pd.DataFrame(timeline)
         fig = px.line(df_tl, x="Temps", y="Note", markers=True, 
                       category_orders={"Note": NOTES_ORDER}, 
@@ -180,12 +182,11 @@ def process_audio(file_bytes, file_name):
                       title=f"Stabilité: {file_name}")
         
         fig.update_layout(
-            paper_bgcolor='#0e1117', 
-            plot_bgcolor='rgba(0,0,0,0)', 
-            margin=dict(l=50, r=20, t=60, b=50),
-            xaxis=dict(gridcolor='#1e293b', title="Temps (sec)"),
-            yaxis=dict(gridcolor='#1e293b', title="Note / Tonalité"),
-            font=dict(color="white")
+            paper_bgcolor='#0e1117', plot_bgcolor='rgba(0,0,0,0)', 
+            margin=dict(l=60, r=20, t=60, b=60),
+            xaxis=dict(gridcolor='#1e293b', title="Temps (secondes)"),
+            yaxis=dict(gridcolor='#1e293b', title="Note Détectée"),
+            font=dict(family="Arial", size=12, color="white")
         )
         img_bytes = fig.to_image(format="png", width=1200, height=600)
 
@@ -229,7 +230,7 @@ if uploaded_files:
                 st.markdown(f'<div class="metric-container"><div class="metric-label">Tempo</div><div class="value-custom">{res["tempo"]} BPM</div></div>', unsafe_allow_html=True)
             with c2: play_chord_button(res['key'], f.name)
             with c3: 
-                tags_html = "".join([f<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
+                tags_html = "".join([f"<span class='profile-tag'>{p}: {v}</span>" for p, v in res['details'].items()])
                 st.markdown(f'<div class="metric-container"><div class="metric-label">Stabilité Algorithmique</div><div>{tags_html}</div></div>', unsafe_allow_html=True)
             
             st.plotly_chart(px.line(pd.DataFrame(res['timeline']), x="Temps", y="Note", markers=True, category_orders={"Note": NOTES_ORDER}, template="plotly_dark"), use_container_width=True)
@@ -262,6 +263,6 @@ if uploaded_files:
 
         pbar.progress((i + 1) / len(uploaded_files))
 
-if st.sidebar.button("🧹 Nettoyer le cache"):
+if st.sidebar.button("Sweep Cache"):
     st.cache_data.clear()
     st.rerun()
