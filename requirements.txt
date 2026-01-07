@@ -1,8 +1,8 @@
 streamlit
-librosa
-numpy
+librosa==0.10.1
+numpy<2.0.0
 pandas
 plotly
-requests
 scipy
-kaleido==0.2.1
+requests
+soundfile
