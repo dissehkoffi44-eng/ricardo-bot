@@ -40,10 +40,7 @@ def generate_reference_chord(key_str, duration=3.0, sr=22050):
     root = parts[0]
     mode = parts[1]
     
-    # Fréquence de base (Octave 3)
     f0 = 130.81 * (2**(root_map[root]/12))
-    
-    # Intervalles (Fondamentale, Tierce, Quinte)
     intervals = [0, 4, 7] if mode == 'major' else [0, 3, 7]
     
     t = np.linspace(0, duration, int(sr * duration))
@@ -51,22 +48,26 @@ def generate_reference_chord(key_str, duration=3.0, sr=22050):
     
     for i in intervals:
         freq = f0 * (2**(i/12))
-        # Ajout d'harmoniques pour un son plus riche que du pur sinus
         chord_signal += 0.5 * np.sin(2 * np.pi * freq * t)
-        chord_signal += 0.2 * np.sin(2 * np.pi * 2 * freq * t) # Harmonique 1
+        chord_signal += 0.2 * np.sin(2 * np.pi * 2 * freq * t) 
         
-    # Enveloppe simple pour éviter les clics
     envelope = np.exp(-t)
     chord_signal = chord_signal * envelope
-    chord_signal /= np.max(np.abs(chord_signal)) # Normalisation
+    chord_signal /= np.max(np.abs(chord_signal))
     
     return chord_signal
 
 def solve_key_logic(chroma_vector):
-    best_score, best_key = -1.0, ""
-    cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
+    """Calcule la tonalité la plus probable à partir d'un vecteur de chromas."""
+    # On renforce les pics pour éviter la confusion avec le bruit de fond
+    cv = np.power(chroma_vector, 2)
+    cv = (cv - cv.min()) / (cv.max() - cv.min() + 1e-6)
     
-    for p_name, p_data in PROFILES.items():
+    best_score, best_key = -1.0, ""
+    
+    # On itère sur les profils musicaux pour trouver la meilleure corrélation
+    for p_name in ["bellman", "krumhansl"]:
+        p_data = PROFILES[p_name]
         for mode in ["major", "minor"]:
             for i in range(12):
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
@@ -79,15 +80,13 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
         audio_bytes = file_buffer.read()
         y, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050)
         
-        # Nettoyage Harmonique (HPSS)
         status_text.text("Séparation des harmoniques...")
         y_harmonic = librosa.effects.harmonic(y)
         
         tuning = librosa.estimate_tuning(y=y_harmonic, sr=sr)
         
         step_sec, hop_sec = 8, 4
-        votes = Counter()
-        timeline, all_chromas = [], []
+        all_chromas = []
         step_samples = step_sec * sr
         hop_samples = hop_sec * sr
         
@@ -98,14 +97,14 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
             mean_chroma_seg = np.mean(chroma, axis=1)
             all_chromas.append(mean_chroma_seg)
             
-            res = solve_key_logic(mean_chroma_seg)
-            votes[res['key']] += (res['score'] ** 2)
-            
             progress = min(start_sample / len(y_harmonic), 1.0)
             progress_bar.progress(progress)
 
-        final_key = votes.most_common(1)[0][0]
+        # CORRECTION : Calcul basé sur la moyenne GLOBALE du morceau (aligné sur le radar)
         full_chroma_avg = np.mean(all_chromas, axis=0)
+        final_res = solve_key_logic(full_chroma_avg)
+        final_key = final_res['key']
+        fiabilite = int(final_res['score'] * 100)
         
         # Tempo
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
@@ -117,7 +116,7 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
         return {
             "name": file_name, "tempo": int(np.round(tempo)), "key": final_key,
             "camelot": camelot_code, "chroma_vals": full_chroma_avg,
-            "sr": sr
+            "fiabilite": fiabilite, "sr": sr
         }
     except Exception as e:
         return {"error": str(e)}
@@ -144,11 +143,13 @@ if uploaded_files:
             with col1:
                 st.markdown(f"""
                     <div style="background:linear-gradient(135deg, #1e3a8a, #581c87); padding:30px; border-radius:15px; text-align:center; color:white;">
-                        <small>TONALITÉ</small>
+                        <small>TONALITÉ DÉTECTÉE</small>
                         <h1 style="font-size:3.5rem; margin:0;">{res['key'].upper()}</h1>
-                        <p>CAMELOT: <b>{res['camelot']}</b> | {res['tempo']} BPM</p>
+                        <p>CAMELOT: <b>{res['camelot']}</b> | FIABILITÉ: {res['fiabilite']}%</p>
                     </div>
                 """, unsafe_allow_html=True)
+                
+                st.write(f"### ⏱️ Tempo estimé : **{res['tempo']} BPM**")
                 
                 # --- AJOUT DE LA NOTE TÉMOIN ---
                 st.write("### 🎹 Note Témoin (Vérification)")
@@ -157,6 +158,17 @@ if uploaded_files:
                 st.caption("Écoutez si cet accord sonne juste avec votre morceau.")
 
             with col2:
-                fig_radar = go.Figure(data=go.Scatterpolar(r=res['chroma_vals'], theta=NOTES_LIST, fill='toself', line_color='#00FFAA'))
-                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=False)), height=300, template="plotly_dark", margin=dict(l=40,r=40,t=40,b=40))
+                st.write("### Analyse des Notes")
+                fig_radar = go.Figure(data=go.Scatterpolar(
+                    r=res['chroma_vals'], 
+                    theta=NOTES_LIST, 
+                    fill='toself', 
+                    line_color='#00FFAA'
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=False)), 
+                    height=350, 
+                    template="plotly_dark", 
+                    margin=dict(l=40,r=40,t=40,b=40)
+                )
                 st.plotly_chart(fig_radar, use_container_width=True)
