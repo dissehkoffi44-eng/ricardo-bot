@@ -29,16 +29,9 @@ PROFILES = {
 
 def apply_perceptual_weighting(y, sr):
     """Applique une pondération de type A (oreille humaine) au signal audio."""
-    # Calcul du spectre de puissance
     S = np.abs(librosa.stft(y))
     freqs = librosa.fft_frequencies(sr=sr)
-    
-    # Calcul de la courbe de pondération A
-    # Formule standard pour simuler la réponse de l'oreille humaine
     a_weighting = librosa.perceptual_weighting(S**2, freqs)
-    
-    # Reconstruction approximative du signal pondéré (ou retour de l'énergie pondérée)
-    # Pour l'analyse de tonalité, nous renvoyons le spectrogramme pondéré
     return S * librosa.db_to_amplitude(a_weighting)
 
 # --- FONCTIONS DE CALCUL ---
@@ -57,7 +50,7 @@ def solve_key_logic(chroma_vector):
                 profile = np.roll(p_data[mode], i)
                 score = np.corrcoef(cv, profile)[0, 1]
                 
-                # Boost intelligent : si la note fondamentale 'i' est forte dans le signal
+                # Boost intelligent de la tonique
                 tonique_boost = 1 + (0.3 * cv[i]) 
                 final_score = score * tonique_boost
                 
@@ -89,17 +82,15 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
         status_text.text("Extraction des composantes harmoniques...")
         y_harmonic = librosa.effects.harmonic(y, margin=3.0)
         
-        # 2. Perception Humaine (A-Weighting)
-        # On ajuste l'énergie des fréquences selon la sensibilité de l'oreille
+        # 2. Perception Humaine (Tuning)
         status_text.text("Application du filtre psychoacoustique...")
         tuning = librosa.estimate_tuning(y=y_harmonic, sr=sr)
         
-        # 3. Analyse CQT (Constant-Q Transform)
-        # Utilisation de l'audio harmonique pondéré par la perception
+        # 3. Analyse CQT
         chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr, tuning=tuning, 
                                             n_chroma=12, bins_per_octave=24)
         
-        # 4. Lissage temporel (Médian)
+        # 4. Lissage temporel
         chroma_smooth = scipy.ndimage.median_filter(chroma, size=(1, 41))
         full_chroma_avg = np.mean(chroma_smooth, axis=1)
         
@@ -118,7 +109,7 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
             "sr": sr
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"name": file_name, "error": str(e)}
 
 # --- INTERFACE UTILISATEUR ---
 st.title("🎧 RCDJ228 M1 PRO - Psycho-Engine v3")
@@ -127,25 +118,32 @@ st.markdown("##### Analyseur de tonalité basé sur la perception auditive humai
 uploaded_files = st.file_uploader("📂 Chargez vos morceaux (MP3, WAV, FLAC)", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
+    # Liste pour stocker les résultats afin de pouvoir les inverser
+    all_results = []
+    
+    # Étape 1 : Traitement de tous les fichiers
     for f in uploaded_files:
         pbar = st.progress(0)
         stext = st.empty()
         
         res = process_audio(f, f.name, pbar, stext)
+        all_results.append(res)
         
         pbar.empty()
         stext.empty()
 
+    # Étape 2 : Affichage des résultats (ORDRE INVERSÉ : Nouveaux en haut)
+    for res in all_results[::-1]:
+        
         if "error" in res:
-            st.error(f"Erreur sur {f.name}: {res['error']}")
+            st.error(f"Erreur sur {res['name']}: {res['error']}")
             continue
 
-        # Affichage des résultats
         with st.expander(f"💎 RÉSULTAT : {res['name']}", expanded=True):
             col1, col2 = st.columns([1, 1.2])
             
             with col1:
-                # Dynamisme de couleur selon la fiabilité
+                # Couleur selon la fiabilité
                 color_code = "#10b981" if res['fiabilite'] > 78 else "#f59e0b"
                 
                 st.markdown(f"""
@@ -161,7 +159,6 @@ if uploaded_files:
                 
                 st.write("---")
                 st.write("### 🎹 Vérification à l'oreille")
-                st.caption("Écoutez si cet accord fusionne parfaitement avec votre morceau.")
                 chord_audio = generate_reference_chord(res['key'], sr=res['sr'])
                 st.audio(chord_audio, sample_rate=res['sr'])
                 
