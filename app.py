@@ -14,7 +14,7 @@ BASE_CAMELOT_MINOR = {'Ab':'1A','G#':'1A','Eb':'2A','D#':'2A','Bb':'3A','A#':'3A
 BASE_CAMELOT_MAJOR = {'B':'1B','F#':'2B','Gb':'2B','Db':'3B','C#':'3B','Ab':'4B','G#':'4B','Eb':'5B','D#':'5B','Bb':'6B','A#':'6B','F':'7B','C':'8B','G':'9B','D':'10B','A':'11B','E':'12B'}
 NOTES_LIST = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-# Profils de Temperley & Sha'ath (plus précis pour la musique moderne que Krumhansl)
+# Profils cognitifs avancés
 PROFILES = {
     "temperley": {
         "major": [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0],
@@ -28,9 +28,31 @@ PROFILES = {
 
 # --- FONCTIONS DE CALCUL ---
 
+def refine_mode_by_tierce(chroma_vector, detected_key):
+    """
+    SONDE DE TIERCE : Vérifie l'énergie de la tierce pour confirmer le mode.
+    C'est l'étape fatale pour ne plus confondre Majeur et Mineur.
+    """
+    root_note = detected_key.split(' ')[0]
+    root_idx = NOTES_LIST.index(root_note)
+    
+    # Indices des tierces (Majeure = +4 demi-tons, Mineure = +3 demi-tons)
+    minor_third_idx = (root_idx + 3) % 12
+    major_third_idx = (root_idx + 4) % 12
+    
+    e_minor = chroma_vector[minor_third_idx]
+    e_major = chroma_vector[major_third_idx]
+    
+    # Si l'IA hésite, on impose la couleur de la tierce dominante
+    if "major" in detected_key and e_minor > (e_major * 1.2):
+        return f"{root_note} minor"
+    elif "minor" in detected_key and e_major > (e_minor * 1.2):
+        return f"{root_note} major"
+    
+    return detected_key
+
 def solve_key_logic(chroma_vector):
     """Analyse cognitive utilisant les profils Temperley et boost de quinte."""
-    # Amplification non-linéaire pour focaliser sur les dominantes
     cv = np.power(chroma_vector, 2.5) 
     cv /= (np.max(cv) + 1e-6)
     
@@ -43,7 +65,7 @@ def solve_key_logic(chroma_vector):
                 profile = np.roll(p_data[mode], i)
                 score = np.corrcoef(cv, profile)[0, 1]
                 
-                # Boost intelligent de la tonique et de la quinte (perception humaine)
+                # Boost tonique et quinte
                 tonique_boost = 1 + (0.25 * cv[i])
                 quinte_idx = (i + 7) % 12
                 quinte_boost = 1 + (0.15 * cv[quinte_idx])
@@ -53,6 +75,9 @@ def solve_key_logic(chroma_vector):
                 if final_score > best_score: 
                     best_score, best_key = final_score, f"{NOTES_LIST[i]} {mode}"
                     
+    # Application de la Sonde de Tierce pour affiner le résultat
+    best_key = refine_mode_by_tierce(cv, best_key)
+    
     return {"key": best_key, "score": min(best_score, 1.0)}
 
 def generate_reference_chord(key_str, duration=2.5, sr=22050):
@@ -74,29 +99,29 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
         status_text.text(f"Lecture : {file_name}")
         y, sr = librosa.load(file_buffer, sr=22050)
         
-        # 1. Isolation Harmonique TRÈS agressive (Retrait des percussions)
-        status_text.text("Nettoyage spectral (HPSS)...")
+        # 1. HPSS : Séparation Harmonique Agressive
+        status_text.text("Extraction harmonique (Percussion Stripping)...")
         y_harmonic = librosa.effects.harmonic(y, margin=8.0)
         
-        # 2. Pre-emphasis (Équilibre du spectre pour l'oreille)
+        # 2. Pre-emphasis : Équilibrage psycho-acoustique
         y_tuned = librosa.effects.preemphasis(y_harmonic)
         
-        # 3. Perception Humaine (Tuning)
-        status_text.text("Calibration du diapason...")
+        # 3. Tuning : Calibration automatique
+        status_text.text("Calcul du diapason...")
         tuning = librosa.estimate_tuning(y=y_tuned, sr=sr)
         
-        # 4. Analyse CQT haute résolution
-        status_text.text("Analyse des chromas...")
+        # 4. Analyse CQT haute résolution (24 bins/octave)
+        status_text.text("Analyse spectrale avancée...")
         chroma = librosa.feature.chroma_cqt(y=y_tuned, sr=sr, tuning=tuning, 
                                             n_chroma=12, bins_per_octave=24)
         
-        # 5. Lissage temporel (Médiane)
+        # 5. Lissage Médian
         chroma_smooth = scipy.ndimage.median_filter(chroma, size=(1, 41))
         full_chroma_avg = np.mean(chroma_smooth, axis=1)
         
-        # 6. Détection Clé + BPM
+        # 6. Détection Clé + Sonde de Tierce + BPM
         res_logic = solve_key_logic(full_chroma_avg)
-        status_text.text("Calcul du tempo...")
+        status_text.text("Tracking du tempo...")
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
 
         key_root = res_logic['key'].split(' ')[0]
@@ -111,15 +136,14 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
     except Exception as e:
         return {"name": file_name, "error": str(e)}
 
-# --- INTERFACE UTILISATEUR ---
+# --- INTERFACE ---
 st.title("🎧 RCDJ228 M1 PRO - Psycho-Engine v3.5")
-st.markdown("##### Moteur Neural-Like : Temperley Profiles + HPSS Percussion Stripping")
+st.markdown("##### Moteur Neural-Like : Temperley Profiles + HPSS + Sonde de Tierce")
 
-uploaded_files = st.file_uploader("📂 Chargez vos morceaux (MP3, WAV, FLAC)", type=['mp3','wav','flac'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Chargez vos morceaux", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
     all_results = []
-    
     for f in uploaded_files:
         pbar = st.progress(0)
         stext = st.empty()
@@ -138,10 +162,9 @@ if uploaded_files:
             
             with col1:
                 color_code = "#10b981" if res['fiabilite'] > 75 else "#f59e0b"
-                
                 st.markdown(f"""
                     <div style="background:#0f172a; padding:25px; border-radius:15px; border-left: 10px solid {color_code}; color:white;">
-                        <small style="opacity:0.7; text-transform:uppercase;">Tonalité Détectée (Algorithme Temperley)</small>
+                        <small style="opacity:0.7; text-transform:uppercase;">Tonalité Confirmée (Sonde de Tierce)</small>
                         <h1 style="margin:0; color:{color_code}; font-size:48px;">{res['key'].upper()}</h1>
                         <div style="display:flex; justify-content:space-between; margin-top:15px; font-weight:bold; border-top:1px solid #334155; padding-top:10px;">
                             <span>SYSTÈME : {res['camelot']}</span>
@@ -154,28 +177,17 @@ if uploaded_files:
                 st.write("### 🎹 Vérification à l'oreille")
                 chord_audio = generate_reference_chord(res['key'], sr=res['sr'])
                 st.audio(chord_audio, sample_rate=res['sr'])
-                
-                fiabilite_msg = "Analyse ultra-précise" if res['fiabilite'] > 75 else "Structure harmonique complexe"
-                st.info(f"**Indice de confiance : {res['fiabilite']}%** — {fiabilite_msg}")
+                st.info(f"**Indice de Pureté Harmonique : {res['fiabilite']}%**")
 
             with col2:
-                st.write("### Empreinte Harmonique (Nettoyée)")
+                st.write("### Empreinte Harmonique")
                 r_data = np.append(res['chroma_vals'], res['chroma_vals'][0])
                 theta_data = NOTES_LIST + [NOTES_LIST[0]]
-
                 fig_radar = go.Figure(data=go.Scatterpolar(
-                    r=r_data, 
-                    theta=theta_data, 
-                    fill='toself', 
-                    line_color=color_code,
+                    r=r_data, theta=theta_data, fill='toself', line_color=color_code,
                     fillcolor=f'rgba({int(color_code[1:3],16)}, {int(color_code[3:5],16)}, {int(color_code[5:7],16)}, 0.25)'
                 ))
-                
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=False), angularaxis=dict(tickfont_size=14)),
-                    template="plotly_dark", height=400, margin=dict(l=40, r=40, t=30, b=30)
-                )
+                fig_radar.update_layout(polar=dict(radialaxis=dict(visible=False)), template="plotly_dark", height=400)
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-st.markdown("---")
-st.caption("Moteur v3.5 | Inarrêtable : CQT + HPSS + Profils de Temperley & Sha'ath.")
+st.caption("Moteur v3.5 Final | Algorithme : CQT High-Res + HPSS + Temperley + Sonde de Tierce.")
