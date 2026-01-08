@@ -7,7 +7,7 @@ import scipy.ndimage
 import io
 
 # --- CONFIGURATION PAGE ---
-st.set_page_config(page_title="RCDJ228 M1 PRO - Psycho-Engine v3.5", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="RCDJ228's Ear", page_icon="🎧", layout="wide")
 
 # --- RÉFÉRENCES MUSICALES & PROFILS IA ---
 BASE_CAMELOT_MINOR = {'Ab':'1A','G#':'1A','Eb':'2A','D#':'2A','Bb':'3A','A#':'3A','F':'4A','C':'5A','G':'6A','D':'7A','A':'8A','E':'9A','B':'10A','F#':'11A','Gb':'11A','Db':'12A','C#':'12A'}
@@ -137,8 +137,8 @@ def process_audio(file_buffer, file_name, progress_bar, status_text):
         return {"name": file_name, "error": str(e)}
 
 # --- INTERFACE ---
-st.title("🎧 RCDJ228 M1 PRO - Psycho-Engine v3.5")
-st.markdown("##### Moteur Neural-Like : Temperley Profiles + HPSS + Sonde de Tierce")
+st.title("🎧 RCDJ228's Ear")
+st.markdown("##### Moteur Neural")
 
 uploaded_files = st.file_uploader("📂 Chargez vos morceaux", type=['mp3','wav','flac'], accept_multiple_files=True)
 
