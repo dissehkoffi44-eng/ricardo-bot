@@ -28,7 +28,6 @@ CAMELOT_MAP = {
     'F# minor': '11A', 'G minor': '6A', 'G# minor': '1A', 'A minor': '8A', 'A# minor': '3A', 'B minor': '10A'
 }
 
-# Profils de Krumhansl-Kessler & Shaath (Ajustés pour la précision harmonique)
 PROFILES = {
     "krumhansl_kessler": {
         "major": [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
@@ -73,7 +72,6 @@ def apply_filters(y, sr):
 def solve_key(chroma_vector):
     best_score = -1
     res = {"key": "Inconnu", "score": 0}
-    
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
     
     for p_name, p_data in PROFILES.items():
@@ -82,15 +80,14 @@ def solve_key(chroma_vector):
                 rotated_profile = np.roll(p_data[mode], i)
                 corr_score = np.corrcoef(cv, rotated_profile)[0, 1]
                 
-                # --- LOGIQUE HARMONIQUE AVANCÉE ---
+                # --- LOGIQUE HARMONIQUE ---
                 third_idx = (i + 3) % 12 if mode == "minor" else (i + 4) % 12
                 fifth_idx = (i + 7) % 12
                 
-                # Règle de la Dominante (ex: B major présent renforce l'idée d'un E minor)
                 dominante_bonus = 0
                 if mode == "minor":
                     dom_root = (i + 7) % 12
-                    dom_third = (i + 11) % 12 # Sensible (ex: Ré# pour Mi)
+                    dom_third = (i + 11) % 12
                     if cv[dom_root] > 0.4 and cv[dom_third] > 0.25:
                         dominante_bonus = 0.12 
 
@@ -111,6 +108,8 @@ def analyze_full_engine(file_bytes, file_name):
     
     duration = librosa.get_duration(y=y, sr=sr)
     tuning = librosa.estimate_tuning(y=y, sr=sr)
+    
+    # Séparation Harmonique / Percussive pour ignorer les batteries
     y_filt = apply_filters(y, sr)
     
     step = 6 
@@ -118,6 +117,7 @@ def analyze_full_engine(file_bytes, file_name):
     votes = Counter()
     
     for start in range(0, int(duration) - step, step):
+        # On travaille sur le segment filtré (harmonique uniquement)
         seg = y_filt[int(start*sr):int((start+step)*sr)]
         if np.max(np.abs(seg)) < 0.01: continue
         
@@ -125,7 +125,14 @@ def analyze_full_engine(file_bytes, file_name):
         chroma_avg = np.mean(chroma, axis=1)
         
         result = solve_key(chroma_avg)
-        votes[result['key']] += int(result['score'] * 100)
+        
+        # --- LOGIQUE DE POIDS STRUCTUREL (DÉBUT/FIN) ---
+        # On donne 1.5x plus d'importance aux 15 premières et 15 dernières secondes
+        poids_structurel = 1.0
+        if start < 15 or start > (duration - 15):
+            poids_structurel = 1.5
+            
+        votes[result['key']] += int(result['score'] * 100 * poids_structurel)
         timeline.append({"Temps": start, "Note": result['key'], "Conf": result['score']})
 
     most_common = votes.most_common(2)
@@ -186,7 +193,7 @@ def get_piano_js(button_id, key_name):
     """
 
 st.title("🎧 ABSOLUTE KEY DETECTOR V4.2")
-st.subheader("Analyse de précision : Profils Krumhansl-Kessler & Bonus de Dominante")
+st.subheader("Analyse Structurelle : Bonus début/fin & Isolation Harmonique")
 
 uploaded_files = st.file_uploader("📂 Glissez vos fichiers audio ici", type=['mp3','wav','flac'], accept_multiple_files=True)
 
