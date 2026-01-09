@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 from scipy.signal import butter, lfilter
 
 # --- CONFIGURATION SYSTÈME ---
-st.set_page_config(page_title="Absolute Key Detector V4.3 - Global Logic", page_icon="🎼", layout="wide")
+st.set_page_config(page_title="DJ's Ear Pro music", page_icon="🎼", layout="wide")
 
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
 CHAT_ID = st.secrets.get("CHAT_ID")
@@ -205,7 +205,7 @@ def get_piano_js(button_id, key_name):
     """
 
 # --- INTERFACE UTILISATEUR ---
-st.title("🎧 ABSOLUTE KEY DETECTOR V4.3")
+st.title("🎧 DJ's Ear Pro music")
 st.subheader("Analyse de Relation V-i (Tonique/Dominante) sur l'empreinte globale")
 
 uploaded_files = st.file_uploader("📂 Glissez vos fichiers audio ici", type=['mp3','wav','flac'], accept_multiple_files=True)
@@ -260,7 +260,7 @@ if uploaded_files:
             # Notification Telegram
             if TELEGRAM_TOKEN and CHAT_ID:
                 try:
-                    msg = (f"🎹 *RAPPORT V4.3*\n📂 `{data['name']}`\n"
+                    msg = (f"🎹 *DJ's Ear Pro music*\n📂 `{data['name']}`\n"
                            f"*Key:* `{data['key']}` ({data['camelot']})\n"
                            f"*Confiance:* `{data['conf']}%` | *BPM:* `{data['tempo']}`")
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
