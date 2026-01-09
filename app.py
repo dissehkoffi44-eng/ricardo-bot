@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 from scipy.signal import butter, lfilter
 
 # --- CONFIGURATION SYSTÈME ---
-st.set_page_config(page_title="Absolute Key Detector V4.2 - Precision Mode", page_icon="🎼", layout="wide")
+st.set_page_config(page_title="Absolute Key Detector V4.3 - Global Logic", page_icon="🎼", layout="wide")
 
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
 CHAT_ID = st.secrets.get("CHAT_ID")
@@ -69,9 +69,10 @@ def apply_filters(y, sr):
     y_clean = lfilter(b, a, y_harm)
     return y_clean
 
-def solve_key(chroma_vector):
+def solve_key(chroma_vector, global_dom_root=None):
     best_score = -1
     res = {"key": "Inconnu", "score": 0}
+    # Normalisation locale du vecteur chroma
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
     
     for p_name, p_data in PROFILES.items():
@@ -80,16 +81,18 @@ def solve_key(chroma_vector):
                 rotated_profile = np.roll(p_data[mode], i)
                 corr_score = np.corrcoef(cv, rotated_profile)[0, 1]
                 
-                # --- LOGIQUE HARMONIQUE ---
+                # --- LOGIQUE HARMONIQUE (V-i) ---
                 third_idx = (i + 3) % 12 if mode == "minor" else (i + 4) % 12
                 fifth_idx = (i + 7) % 12
                 
                 dominante_bonus = 0
-                if mode == "minor":
-                    dom_root = (i + 7) % 12
-                    dom_third = (i + 11) % 12
-                    if cv[dom_root] > 0.4 and cv[dom_third] > 0.25:
-                        dominante_bonus = 0.12 
+                # Si une relation de dominante globale a été pré-identifiée
+                if global_dom_root is not None:
+                    expected_dom = (i + 7) % 12
+                    if expected_dom == global_dom_root:
+                        # Bonus si la quinte est forte dans ce segment précis
+                        if cv[global_dom_root] > 0.35:
+                            dominante_bonus = 0.15
 
                 tierce_weight = 0.15 * cv[third_idx]
                 quinte_weight = 0.05 * cv[fifth_idx]
@@ -106,41 +109,51 @@ def analyze_full_engine(file_bytes, file_name):
     with io.BytesIO(file_bytes) as b:
         y, sr = librosa.load(b, sr=22050, mono=True)
     
-    duration = librosa.get_duration(y=y, sr=sr)
     tuning = librosa.estimate_tuning(y=y, sr=sr)
-    
-    # Séparation Harmonique / Percussive pour ignorer les batteries
     y_filt = apply_filters(y, sr)
     
+    # --- LOGIQUE V-i GLOBALE (Point 1) ---
+    # On analyse le spectre moyen de TOUT le fichier pour trouver le couple Tonique/Dominante
+    full_chroma_matrix = librosa.feature.chroma_cqt(y=y_filt, sr=sr, tuning=tuning)
+    global_chroma_avg = np.mean(full_chroma_matrix, axis=1)
+    
+    # Trouver les 2 notes les plus puissantes
+    top_2_idx = np.argsort(global_chroma_avg)[-2:]
+    n_primary, n_secondary = top_2_idx[1], top_2_idx[0]
+    
+    # Déterminer si l'une est la dominante de l'autre
+    global_dom_root = None
+    if (n_primary + 7) % 12 == n_secondary: # n_secondary est la quinte de n_primary
+        global_dom_root = n_secondary
+    elif (n_secondary + 7) % 12 == n_primary: # n_primary est la quinte de n_secondary
+        global_dom_root = n_primary
+
+    # --- ANALYSE TEMPORELLE ---
+    duration = librosa.get_duration(y=y, sr=sr)
     step = 6 
     timeline = []
     votes = Counter()
     
     for start in range(0, int(duration) - step, step):
-        # On travaille sur le segment filtré (harmonique uniquement)
         seg = y_filt[int(start*sr):int((start+step)*sr)]
         if np.max(np.abs(seg)) < 0.01: continue
         
-        chroma = librosa.feature.chroma_cqt(y=seg, sr=sr, tuning=tuning, bins_per_octave=36)
-        chroma_avg = np.mean(chroma, axis=1)
+        chroma_seg = librosa.feature.chroma_cqt(y=seg, sr=sr, tuning=tuning)
+        chroma_avg = np.mean(chroma_seg, axis=1)
         
-        result = solve_key(chroma_avg)
+        # On injecte la dominante globale pour influencer chaque segment
+        result = solve_key(chroma_avg, global_dom_root=global_dom_root)
         
-        # --- LOGIQUE DE POIDS STRUCTUREL (DÉBUT/FIN) ---
-        # On donne 1.5x plus d'importance aux 15 premières et 15 dernières secondes
-        poids_structurel = 1.0
-        if start < 15 or start > (duration - 15):
-            poids_structurel = 1.5
-            
+        poids_structurel = 1.5 if (start < 15 or start > (duration - 15)) else 1.0
         votes[result['key']] += int(result['score'] * 100 * poids_structurel)
         timeline.append({"Temps": start, "Note": result['key'], "Conf": result['score']})
 
+    # Synthèse finale
     most_common = votes.most_common(2)
     main_key = most_common[0][0]
     
     target_key = None
     modulation_detected = False
-    
     if len(most_common) > 1:
         second_key = most_common[1][0]
         unique_keys = [t['Note'] for t in timeline]
@@ -151,13 +164,12 @@ def analyze_full_engine(file_bytes, file_name):
     avg_conf = int(np.mean([t['Conf'] for t in timeline if t['Note'] == main_key]) * 100)
     _, y_perc = librosa.effects.hpss(y)
     tempo, _ = librosa.beat.beat_track(y=y_perc, sr=sr)
-    full_chroma = np.mean(librosa.feature.chroma_cqt(y=y_filt, sr=sr, tuning=tuning), axis=1)
     
     output = {
         "key": main_key, "camelot": CAMELOT_MAP.get(main_key, "??"),
         "conf": avg_conf, "tempo": int(float(tempo)),
         "tuning": round(440 * (2**(tuning/12)), 1),
-        "timeline": timeline, "chroma": full_chroma,
+        "timeline": timeline, "chroma": global_chroma_avg,
         "modulation": modulation_detected, "target_key": target_key,
         "target_camelot": CAMELOT_MAP.get(target_key, "??") if target_key else None,
         "name": file_name
@@ -192,14 +204,15 @@ def get_piano_js(button_id, key_name):
     }};
     """
 
-st.title("🎧 ABSOLUTE KEY DETECTOR V4.2")
-st.subheader("Analyse Structurelle : Bonus début/fin & Isolation Harmonique")
+# --- INTERFACE UTILISATEUR ---
+st.title("🎧 ABSOLUTE KEY DETECTOR V4.3")
+st.subheader("Analyse de Relation V-i (Tonique/Dominante) sur l'empreinte globale")
 
 uploaded_files = st.file_uploader("📂 Glissez vos fichiers audio ici", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
     for f in uploaded_files:
-        with st.spinner(f"Analyse en cours... {f.name}"):
+        with st.spinner(f"Analyse structurelle de {f.name}..."):
             data = analyze_full_engine(f.read(), f.name)
         
         with st.expander(f"📊 RÉSULTATS : {data['name']}", expanded=True):
@@ -217,19 +230,19 @@ if uploaded_files:
             st.write("---")
             m1, m2, m3 = st.columns(3)
             with m1:
-                st.markdown(f"<div class='metric-box'><b>TEMPO ANALYSÉ</b><br><span style='font-size:1.8em;'>{data['tempo']} BPM</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:1.8em;'>{data['tempo']} BPM</span></div>", unsafe_allow_html=True)
                 st.markdown(f"<div class='metric-box' style='margin-top:10px;'><b>DIAPASON</b><br><span style='font-size:1.2em;'>{data['tuning']} Hz</span></div>", unsafe_allow_html=True)
             with m2:
                 uid_main = f"btn_main_{hash(f.name)}"
-                st.markdown(f"<b>VÉRIFICATION : {data['key'].upper()}</b>", unsafe_allow_html=True)
-                components.html(f"""<button id="{uid_main}" style="width:100%; height:100px; background:linear-gradient(90deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 TESTER L'ACCORD</button><script>{get_piano_js(uid_main, data['key'])}</script>""", height=120)
+                st.markdown(f"<b>TESTER L'ACCORD : {data['key'].upper()}</b>", unsafe_allow_html=True)
+                components.html(f"""<button id="{uid_main}" style="width:100%; height:100px; background:linear-gradient(90deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 JOUER</button><script>{get_piano_js(uid_main, data['key'])}</script>""", height=120)
             with m3:
                 if data['modulation']:
                     uid_mod = f"btn_mod_{hash(f.name)}"
-                    st.markdown(f"<b>VÉRIFICATION : {data['target_key'].upper()}</b>", unsafe_allow_html=True)
-                    components.html(f"""<button id="{uid_mod}" style="width:100%; height:100px; background:linear-gradient(90deg, #ef4444, #b91c1c); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 TESTER L'ACCORD</button><script>{get_piano_js(uid_mod, data['target_key'])}</script>""", height=120)
+                    st.markdown(f"<b>MODULATION : {data['target_key'].upper()}</b>", unsafe_allow_html=True)
+                    components.html(f"""<button id="{uid_mod}" style="width:100%; height:100px; background:linear-gradient(90deg, #ef4444, #b91c1c); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 JOUER</button><script>{get_piano_js(uid_mod, data['target_key'])}</script>""", height=120)
                 else:
-                    st.markdown("<div style='height:120px; display:flex; align-items:center; justify-content:center; opacity:0.3; border:2px dashed #444; border-radius:15px;'>Aucune déviation majeure</div>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:120px; display:flex; align-items:center; justify-content:center; opacity:0.3; border:2px dashed #444; border-radius:15px;'>Stabilité Harmonique</div>", unsafe_allow_html=True)
 
             c_left, c_right = st.columns([2, 1])
             with c_left:
@@ -244,9 +257,10 @@ if uploaded_files:
                 fig_radar.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30,r=30,t=30,b=30), height=350)
                 st.plotly_chart(fig_radar, use_container_width=True)
 
+            # Notification Telegram
             if TELEGRAM_TOKEN and CHAT_ID:
                 try:
-                    msg = (f"🎹 *RAPPORT V4.2*\n📂 `{data['name']}`\n"
+                    msg = (f"🎹 *RAPPORT V4.3*\n📂 `{data['name']}`\n"
                            f"*Key:* `{data['key']}` ({data['camelot']})\n"
                            f"*Confiance:* `{data['conf']}%` | *BPM:* `{data['tempo']}`")
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
@@ -256,4 +270,4 @@ if uploaded_files:
         st.cache_data.clear()
         st.rerun()
 else:
-    st.info("Prêt pour l'analyse. Glissez vos fichiers dans la zone centrale.")
+    st.info("Prêt pour l'analyse. Glissez vos fichiers pour tester la logique V-i globale.")
