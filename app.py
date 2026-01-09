@@ -2,189 +2,252 @@ import streamlit as st
 import librosa
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
-import scipy.ndimage
+from collections import Counter
 import io
+import requests
+import gc
+import streamlit.components.v1 as components
+from scipy.signal import butter, lfilter
 
-# --- CONFIGURATION PAGE ---
-st.set_page_config(page_title="RCDJ228 M1 PRO - Psycho-Engine v3.6", page_icon="🎧", layout="wide")
+# --- CONFIGURATION SYSTÈME ---
+st.set_page_config(page_title="Absolute Key Detector V4 - HPSS", page_icon="🎼", layout="wide")
 
-# --- RÉFÉRENCES MUSICALES & PROFILS IA ---
-BASE_CAMELOT_MINOR = {'Ab':'1A','G#':'1A','Eb':'2A','D#':'2A','Bb':'3A','A#':'3A','F':'4A','C':'5A','G':'6A','D':'7A','A':'8A','E':'9A','B':'10A','F#':'11A','Gb':'11A','Db':'12A','C#':'12A'}
-BASE_CAMELOT_MAJOR = {'B':'1B','F#':'2B','Gb':'2B','Db':'3B','C#':'3B','Ab':'4B','G#':'4B','Eb':'5B','D#':'5B','Bb':'6B','A#':'6B','F':'7B','C':'8B','G':'9B','D':'10B','A':'11B','E':'12B'}
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
+CHAT_ID = st.secrets.get("CHAT_ID")
+
+# --- RÉFÉRENTIELS HARMONIQUES ---
 NOTES_LIST = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+NOTES_ORDER = [f"{n} {m}" for n in NOTES_LIST for m in ['major', 'minor']]
+
+CAMELOT_MAP = {
+    'C major': '8B', 'C# major': '3B', 'D major': '10B', 'D# major': '5B', 'E major': '12B', 'F major': '7B',
+    'F# major': '2B', 'G major': '9B', 'G# major': '4B', 'A major': '11B', 'A# major': '6B', 'B major': '1B',
+    'C minor': '5A', 'C# minor': '12A', 'D minor': '7A', 'D# minor': '2A', 'E minor': '9A', 'F minor': '4A',
+    'F# minor': '11A', 'G minor': '6A', 'G# minor': '1A', 'A minor': '8A', 'A# minor': '3A', 'B minor': '10A'
+}
 
 PROFILES = {
-    "temperley": {
-        "major": [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0],
-        "minor": [5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0]
+    "krumhansl": {
+        "major": [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
+        "minor": [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
     },
-    "shaath": {
-        "major": [6.6, 2.0, 3.5, 2.3, 4.6, 4.0, 2.5, 5.2, 2.4, 3.7, 2.3, 3.4],
-        "minor": [6.5, 2.7, 3.5, 5.4, 2.6, 3.5, 2.5, 5.2, 4.0, 2.7, 4.3, 3.2]
+    "bellman": {
+        "major": [16.8, 0.86, 12.95, 1.41, 13.49, 11.93, 1.25, 16.74, 1.56, 12.81, 1.89, 12.44],
+        "minor": [18.16, 0.69, 12.99, 13.34, 1.07, 11.15, 1.38, 17.2, 13.62, 1.27, 12.79, 2.4]
     }
 }
 
-# --- FONCTIONS DE CALCUL ---
+# --- STYLES CSS ---
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    .report-card { 
+        background: linear-gradient(135deg, #0f172a, #1e1b4b); 
+        padding: 40px; border-radius: 25px; text-align: center; color: white; 
+        border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    .modulation-alert {
+        background: rgba(239, 68, 68, 0.1); color: #f87171;
+        padding: 15px; border-radius: 12px; border: 1px solid #ef4444;
+        margin-top: 20px; font-weight: bold; font-size: 1.1em;
+    }
+    .metric-box {
+        background: #1a1c24; border-radius: 15px; padding: 15px; text-align: center; border: 1px solid #333;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-def solve_key_logic(chroma_vector):
-    """Analyse renforcée contre les fausses toniques (Ex: confusion Tonique/Quinte)."""
-    # Amplification cubique pour isoler les pics réels des harmoniques fantômes
-    cv = np.power(chroma_vector, 3.0) 
-    cv /= (np.max(cv) + 1e-6)
+# --- FONCTIONS DE TRAITEMENT ---
+
+def apply_filters(y, sr):
+    # 1. Séparation Harmonique / Percussive (Comme Mixed In Key)
+    # On ne garde que la partie 'y_harm' pour l'analyse de tonalité
+    y_harm, y_perc = librosa.effects.hpss(y)
     
-    best_score, best_key = -1.0, ""
+    # 2. Pré-emphase sur la partie harmonique
+    y_harm = librosa.effects.preemphasis(y_harm)
     
-    for p_name in ["temperley", "shaath"]:
-        p_data = PROFILES[p_name]
+    # 3. Filtre passe-bande pour isoler la zone mélodique utile
+    nyq = 0.5 * sr
+    b, a = butter(4, [80/nyq, 5000/nyq], btype='band')
+    y_clean = lfilter(b, a, y_harm)
+    
+    return y_clean
+
+def solve_key(chroma_vector):
+    best_score = -1
+    res = {"key": "Inconnu", "score": 0}
+    cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
+    
+    for p_name, p_data in PROFILES.items():
         for mode in ["major", "minor"]:
             for i in range(12):
-                profile = np.roll(p_data[mode], i)
-                
-                # Corrélation statistique de base
-                base_corr = np.corrcoef(cv, profile)[0, 1]
-                
-                # --- LOGIQUE ANTI-ERREUR ---
-                # Presence physique de la tonique supposée
-                tonique_presence = cv[i]
-                # Presence de sa quinte (i+7)
-                quinte_idx = (i + 7) % 12
-                quinte_presence = cv[quinte_idx]
-                
-                # Pénalité : Si la quinte est beaucoup plus forte que la tonique, 
-                # il y a de fortes chances que ce soit la quinte qui soit prise pour une tonique.
-                penalty = 1.0
-                if quinte_presence > (tonique_presence * 1.4):
-                    penalty = 0.8  
-                
-                # Score final pondéré par la solidité de la tonique
-                # Un profil qui colle bien MAIS dont la tonique est absente sera déclassé.
-                final_score = base_corr * (1 + tonique_presence) * penalty
-                
-                if final_score > best_score: 
-                    best_score, best_key = final_score, f"{NOTES_LIST[i]} {mode}"
-                    
-    return {"key": best_key, "score": min(best_score, 1.0)}
+                score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
+                if score > best_score:
+                    best_score = score
+                    res = {"key": f"{NOTES_LIST[i]} {mode}", "score": score}
+    return res
 
-def generate_reference_chord(key_str, duration=2.5, sr=22050):
-    root_map = {n: i for i, n in enumerate(NOTES_LIST)}
-    parts = key_str.split(' ')
-    root, mode = parts[0], parts[1]
-    f0 = 130.81 * (2**(root_map[root]/12))
-    intervals = [0, 4, 7] if mode == 'major' else [0, 3, 7]
-    t = np.linspace(0, duration, int(sr * duration))
-    chord_signal = np.zeros_like(t)
-    for i in intervals:
-        freq = f0 * (2**(i/12))
-        chord_signal += 0.4 * np.sin(2 * np.pi * freq * t)
-    chord_signal *= np.exp(-1.5 * t)
-    return chord_signal / (np.max(np.abs(chord_signal)) + 1e-6)
-
-def process_audio(file_buffer, file_name, progress_bar, status_text):
-    try:
-        status_text.text(f"Lecture : {file_name}")
-        y, sr = librosa.load(file_buffer, sr=22050)
+@st.cache_data(show_spinner=False)
+def analyze_full_engine(file_bytes, file_name):
+    with io.BytesIO(file_bytes) as b:
+        y, sr = librosa.load(b, sr=22050, mono=True)
+    
+    duration = librosa.get_duration(y=y, sr=sr)
+    
+    # Estimation de l'accordage (sur l'audio original)
+    tuning = librosa.estimate_tuning(y=y, sr=sr)
+    
+    # Application du filtre HPSS + Bandpass
+    y_filt = apply_filters(y, sr)
+    
+    step = 6 
+    timeline = []
+    votes = Counter()
+    
+    for start in range(0, int(duration) - step, step):
+        seg = y_filt[int(start*sr):int((start+step)*sr)]
+        if np.max(np.abs(seg)) < 0.01: continue
         
-        # 1. HPSS (Isolation Harmonique)
-        status_text.text("Nettoyage spectral (HPSS)...")
-        y_harmonic = librosa.effects.harmonic(y, margin=8.0)
+        # Chroma CQT plus précis (bins_per_octave=36 pour plus de finesse)
+        chroma = librosa.feature.chroma_cqt(y=seg, sr=sr, tuning=tuning, bins_per_octave=36)
+        chroma_avg = np.mean(chroma**2, axis=1)
         
-        # 2. Pre-emphasis & Tuning
-        y_tuned = librosa.effects.preemphasis(y_harmonic)
-        status_text.text("Calibration du diapason...")
-        tuning = librosa.estimate_tuning(y=y_tuned, sr=sr)
-        
-        # 3. CQT Haute Résolution (fmin bas pour capter les toniques en basse)
-        status_text.text("Analyse des chromas...")
-        chroma = librosa.feature.chroma_cqt(y=y_tuned, sr=sr, tuning=tuning, 
-                                            n_chroma=12, bins_per_octave=24, fmin=librosa.note_to_hz('C1'))
-        
-        # 4. Lissage Temporel
-        chroma_smooth = scipy.ndimage.median_filter(chroma, size=(1, 41))
-        full_chroma_avg = np.mean(chroma_smooth, axis=1)
-        
-        # 5. Détection Clé + BPM
-        res_logic = solve_key_logic(full_chroma_avg)
-        status_text.text("Calcul du tempo...")
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        result = solve_key(chroma_avg)
+        votes[result['key']] += int(result['score'] * 100)
+        timeline.append({"Temps": start, "Note": result['key'], "Conf": result['score']})
 
-        key_root = res_logic['key'].split(' ')[0]
-        camelot = (BASE_CAMELOT_MINOR if 'minor' in res_logic['key'] else BASE_CAMELOT_MAJOR).get(key_root, "??")
+    most_common = votes.most_common(2)
+    main_key = most_common[0][0]
+    
+    target_key = None
+    modulation_detected = False
+    
+    if len(most_common) > 1:
+        second_key = most_common[1][0]
+        unique_keys_in_flow = [t['Note'] for t in timeline]
+        # Si une autre tonalité apparaît plus de 18% du temps
+        if unique_keys_in_flow.count(second_key) > (len(timeline) * 0.18):
+            modulation_detected = True
+            target_key = second_key
 
-        return {
-            "name": file_name, "tempo": int(np.round(tempo)), 
-            "key": res_logic['key'], "camelot": camelot, 
-            "chroma_vals": full_chroma_avg, "fiabilite": int(res_logic['score'] * 100), 
-            "sr": sr
-        }
-    except Exception as e:
-        return {"name": file_name, "error": str(e)}
+    avg_conf = int(np.mean([t['Conf'] for t in timeline if t['Note'] == main_key]) * 100)
+    
+    # Tempo basé sur la version percursive (plus précis pour le rythme)
+    _, y_perc = librosa.effects.hpss(y)
+    tempo, _ = librosa.beat.beat_track(y=y_perc, sr=sr)
+    
+    full_chroma = np.mean(librosa.feature.chroma_cqt(y=y_filt, sr=sr, tuning=tuning), axis=1)
+    
+    output = {
+        "key": main_key, "camelot": CAMELOT_MAP.get(main_key, "??"),
+        "conf": avg_conf, "tempo": int(float(tempo)),
+        "tuning": round(440 * (2**(tuning/12)), 1),
+        "timeline": timeline, "chroma": full_chroma,
+        "modulation": modulation_detected, 
+        "target_key": target_key,
+        "target_camelot": CAMELOT_MAP.get(target_key, "??") if target_key else None,
+        "name": file_name
+    }
+    
+    del y, y_filt, y_perc
+    gc.collect()
+    return output
 
-# --- INTERFACE UTILISATEUR ---
-st.title("🎧 RCDJ228 M1 PRO - Psycho-Engine v3.6")
-st.markdown("##### Moteur Neural-Like : Temperley Profiles + Harmonic-Structural Weighting")
+# --- LE RESTE DU CODE (Piano JS et UI) RESTE IDENTIQUE ---
+def get_piano_js(button_id, key_name):
+    if not key_name or " " not in key_name: return ""
+    n, mode = key_name.split()
+    return f"""
+    document.getElementById('{button_id}').onclick = function() {{
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const freqs = {{'C':261.6,'C#':277.2,'D':293.7,'D#':311.1,'E':329.6,'F':349.2,'F#':370.0,'G':392.0,'G#':415.3,'A':440.0,'A#':466.2,'B':493.9}};
+        const isMinor = '{mode}' === 'minor';
+        const chord = isMinor ? [0, 3, 7, 12] : [0, 4, 7, 12];
+        chord.forEach((interval) => {{
+            const baseFreq = freqs['{n}'] * Math.pow(2, interval/12);
+            [1, 2, 3].forEach((harmonic, index) => {{
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = index === 0 ? 'triangle' : 'sine';
+                osc.frequency.setValueAtTime(baseFreq * harmonic, ctx.currentTime);
+                gain.gain.setValueAtTime(0, ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.15 / harmonic, ctx.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 2.5);
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.start(); osc.stop(ctx.currentTime + 2.5);
+            }});
+        }});
+    }};
+    """
 
-uploaded_files = st.file_uploader("📂 Chargez vos morceaux", type=['mp3','wav','flac'], accept_multiple_files=True)
+st.title("🎧 ABSOLUTE KEY DETECTOR V4.1 (HPSS)")
+st.subheader("Analyse Mélodique Pure sans interférences percursives")
+
+uploaded_files = st.file_uploader("📂 Glissez vos fichiers audio ici", type=['mp3','wav','flac'], accept_multiple_files=True)
 
 if uploaded_files:
-    all_results = []
-    
     for f in uploaded_files:
-        pbar = st.progress(0)
-        stext = st.empty()
-        res = process_audio(f, f.name, pbar, stext)
-        all_results.append(res)
-        pbar.empty()
-        stext.empty()
+        with st.spinner(f"Séparation des harmoniques et analyse de {f.name}..."):
+            data = analyze_full_engine(f.read(), f.name)
+        
+        with st.expander(f"📊 RÉSULTATS : {data['name']}", expanded=True):
+            bg_color = "linear-gradient(135deg, #0f172a, #1e3a8a)" if not data['modulation'] else "linear-gradient(135deg, #1e1b4b, #7f1d1d)"
+            modulation_html = f"<div class='modulation-alert'>⚠️ MODULATION DÉTECTÉE <br><span style='font-size:1.3em;'>Vers : {data['target_key'].upper()} ({data['target_camelot']})</span></div>" if data['modulation'] else ""
 
-    for res in all_results[::-1]:
-        if "error" in res:
-            st.error(f"Erreur sur {res['name']}: {res['error']}")
-            continue
+            st.markdown(f"""
+                <div class="report-card" style="background:{bg_color};">
+                    <p style="text-transform:uppercase; letter-spacing:2px; opacity:0.7;">Tonalité Dominante</p>
+                    <h1 style="font-size:6em; margin:10px 0;">{data['key'].upper()}</h1>
+                    <p style="font-size:1.8em;">CAMELOT : <b>{data['camelot']}</b> | CONFIANCE : <b>{data['conf']}%</b></p>
+                    {modulation_html}
+                </div>
+            """, unsafe_allow_html=True)
 
-        with st.expander(f"💎 RÉSULTAT : {res['name']}", expanded=True):
-            col1, col2 = st.columns([1, 1.2])
-            
-            with col1:
-                color_code = "#10b981" if res['fiabilite'] > 70 else "#f59e0b"
-                
-                st.markdown(f"""
-                    <div style="background:#0f172a; padding:25px; border-radius:15px; border-left: 10px solid {color_code}; color:white;">
-                        <small style="opacity:0.7; text-transform:uppercase;">Tonalité Validée (Filtre Tonique)</small>
-                        <h1 style="margin:0; color:{color_code}; font-size:48px;">{res['key'].upper()}</h1>
-                        <div style="display:flex; justify-content:space-between; margin-top:15px; font-weight:bold; border-top:1px solid #334155; padding-top:10px;">
-                            <span>SYSTÈME : {res['camelot']}</span>
-                            <span>TEMPO : {res['tempo']} BPM</span>
-                        </div>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                st.write("---")
-                st.write("### 🎹 Vérification à l'oreille")
-                chord_audio = generate_reference_chord(res['key'], sr=res['sr'])
-                st.audio(chord_audio, sample_rate=res['sr'])
-                
-                fiabilite_msg = "Analyse ultra-précise (Tonique confirmée)" if res['fiabilite'] > 70 else "Structure complexe : Quinte dominante ?"
-                st.info(f"**Indice de confiance : {res['fiabilite']}%** — {fiabilite_msg}")
+            st.write("---")
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:1.8em;'>{data['tempo']} BPM</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='metric-box' style='margin-top:10px;'><b>ACCORDAGE</b><br><span style='font-size:1.2em;'>{data['tuning']} Hz</span></div>", unsafe_allow_html=True)
+            with m2:
+                st.markdown(f"<b>ACCORD {data['key'].upper()}</b>", unsafe_allow_html=True)
+                uid_main = f"btn_main_{f.name.replace('.','').replace(' ','')}"
+                components.html(f"""<button id="{uid_main}" style="width:100%; height:100px; background:linear-gradient(90deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 JOUER L'ACCORD</button><script>{get_piano_js(uid_main, data['key'])}</script>""", height=120)
+            with m3:
+                if data['modulation']:
+                    st.markdown(f"<b>ACCORD {data['target_key'].upper()}</b>", unsafe_allow_html=True)
+                    uid_mod = f"btn_mod_{f.name.replace('.','').replace(' ','')}"
+                    components.html(f"""<button id="{uid_mod}" style="width:100%; height:100px; background:linear-gradient(90deg, #ef4444, #b91c1c); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold; font-size:1.1em; box-shadow:0 4px 15px rgba(0,0,0,0.3);">🎹 JOUER L'ACCORD</button><script>{get_piano_js(uid_mod, data['target_key'])}</script>""", height=120)
+                else:
+                    st.markdown("<div style='height:120px; display:flex; align-items:center; justify-content:center; opacity:0.3; border:2px dashed #444; border-radius:15px;'>Pas de Modulation</div>", unsafe_allow_html=True)
 
-            with col2:
-                st.write("### Empreinte Harmonique (Nettoyée)")
-                r_data = np.append(res['chroma_vals'], res['chroma_vals'][0])
-                theta_data = NOTES_LIST + [NOTES_LIST[0]]
-
-                fig_radar = go.Figure(data=go.Scatterpolar(
-                    r=r_data, 
-                    theta=theta_data, 
-                    fill='toself', 
-                    line_color=color_code,
-                    fillcolor=f'rgba({int(color_code[1:3],16)}, {int(color_code[3:5],16)}, {int(color_code[5:7],16)}, 0.25)'
-                ))
-                
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=False), angularaxis=dict(tickfont_size=14)),
-                    template="plotly_dark", height=400, margin=dict(l=40, r=40, t=30, b=30)
-                )
+            c_left, c_right = st.columns([2, 1])
+            with c_left:
+                st.markdown("#### 📈 Flux Harmonique")
+                df_tl = pd.DataFrame(data['timeline'])
+                fig_line = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER}, color_discrete_sequence=['#818cf8'])
+                fig_line.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=350)
+                st.plotly_chart(fig_line, use_container_width=True)
+            with c_right:
+                st.markdown("#### 🌀 Profil de Fréquences")
+                fig_radar = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#818cf8'))
+                fig_radar.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30,r=30,t=30,b=30), height=350)
                 st.plotly_chart(fig_radar, use_container_width=True)
 
-st.markdown("---")
-st.caption("Moteur v3.6 | Structural Anti-Trap Engine | CQT + HPSS + Profils de Temperley.")
+            if TELEGRAM_TOKEN and CHAT_ID:
+                try:
+                    mod_txt = f"⚠️ Modulation vers {data['target_key']}" if data['modulation'] else "✅ Stable"
+                    msg = (f"🎹 *RAPPORT HPSS V4.1*\n📂 `{data['name']}`\n\n"
+                           f"*Tonalité:* `{data['key']}`\n*Camelot:* `{data['camelot']}`\n"
+                           f"*Stabilité:* {mod_txt}\n*Confiance:* `{data['conf']}%`\n"
+                           f"*Tempo:* `{data['tempo']} BPM`")
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+                except: pass
+
+    if st.sidebar.button("🧹 Vider le cache mémoire"):
+        st.cache_data.clear()
+        st.rerun()
+else:
+    st.info("Glissez vos fichiers audio pour commencer l'analyse.")
