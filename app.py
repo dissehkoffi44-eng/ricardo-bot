@@ -192,7 +192,7 @@ def get_piano_js(button_id, key_name):
 
 # --- INTERFACE ---
 st.title("🎧 DJ's Ear Pro Elite")
-st.markdown("### Haute Précision : 24 Bins + Tuning Correction + Logique V-i")
+st.markdown("### Haute Précision ")
 
 files = st.file_uploader("📂 Déposer vos morceaux (MP3, WAV, FLAC)", type=['mp3','wav','flac'], accept_multiple_files=True)
 
