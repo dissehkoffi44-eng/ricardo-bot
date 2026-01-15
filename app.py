@@ -127,12 +127,15 @@ def solve_key_sniper(chroma_vector, bass_vector):
 @st.cache_data(show_spinner=False)
 def process_audio_cached(file_bytes, file_name):
     audio = AudioSegment.from_file(io.BytesIO(file_bytes))
+    # Harmonisation avec Code 1 : Forcer échantillonnage 16-bit
+    audio = audio.set_sample_width(2)
     samples = np.array(audio.get_array_of_samples()).astype(np.float32)
     
     if audio.channels == 2:
         samples = samples.reshape((-1, 2)).mean(axis=1)
     
-    y = samples / (2**15)
+    # Correction de normalisation pour correspondre au moteur Librosa du Code 1
+    y = samples / 32768.0
     sr = audio.frame_rate
 
     if sr != 22050:
