@@ -237,69 +237,77 @@ def get_chord_js(btn_id, key_str):
     }}; """
 
 # --- INTERFACE PRINCIPALE ---
+# --- INTERFACE PRINCIPALE ---
 st.title("🎯 RCDJ228 SNIPER M3")
 
 uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
+    # --- RÉSERVE L'ESPACE EN HAUT POUR LA PROGRESSION ---
+    global_progress_placeholder = st.empty() 
+    
     total_files = len(uploaded_files)
     
-    # Zone de progression dynamique
-    progress_container = st.container()
+    # On utilise un conteneur pour que les résultats s'affichent en dessous
+    results_container = st.container()
     
     for i, f in enumerate(reversed(uploaded_files)):
-        # Affichage du statut global et interne
-        with progress_container:
-            overall_p = int(((i) / total_files) * 100)
-            st.markdown(f"**Analyse globale : {i+1}/{total_files}**")
-            main_bar = st.progress(overall_p)
+        # Mise à jour de la barre globale (en haut)
+        overall_p = int(((i) / total_files) * 100)
+        global_progress_placeholder.markdown(f"""
+            <div style="padding:10px; border-radius:10px; background-color:rgba(16, 185, 129, 0.1); border:1px solid #10b981; margin-bottom:20px;">
+                <p style="margin:0; font-weight:bold; color:#10b981;">📊 ANALYSE GLOBALE : {i+1} / {total_files}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        # Note: On peut aussi ajouter une vraie barre st.progress ici si on veut
+        # global_progress_placeholder.progress(overall_p)
+
+        # Zone de statut pour le fichier actuel (apparaît juste au dessus du résultat)
+        with st.status(f"🎯 Traitement de : `{f.name}`", expanded=True) as status:
+            inner_bar = st.progress(0)
+            status_text = st.empty()
             
-            # Utilisation de st.status pour une barre de progression interne élégante
-            with st.status(f"🎯 Traitement de : `{f.name}`", expanded=True) as status:
-                inner_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Callback pour mettre à jour l'interface pendant l'analyse
-                def update_progress(val, msg):
-                    inner_bar.progress(val)
-                    status_text.code(msg)
+            def update_progress(val, msg):
+                inner_bar.progress(val)
+                status_text.code(msg)
 
-                # Utilisation du paramètre haché par underscore
-                data = process_audio_precision(f.read(), f.name, _progress_callback=update_progress)
-                status.update(label=f"✅ {f.name} terminé", state="complete", expanded=False)
-                
-            # Nettoyage des barres temporaires pour le fichier suivant
-            main_bar.empty()
+            data = process_audio_precision(f.read(), f.name, _progress_callback=update_progress)
+            status.update(label=f"✅ {f.name} terminé", state="complete", expanded=False)
 
+        # Affichage des résultats dans le conteneur principal
         if data:
-            st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
-            color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
-            st.markdown(f"""
-                <div class="report-card" style="background:{color};">
-                    <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{data['key'].upper()}</h1>
-                    <p style="font-size:1.5em; opacity:0.9;">CAMELOT: <b>{data['camelot']}</b> | CONFIANCE: <b>{data['conf']}%</b></p>
-                    {f"<div class='modulation-alert'> ⚠️ MODULATION DÉTECTÉE : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
-                </div> """, unsafe_allow_html=True)
-            
-            m1, m2, m3 = st.columns(3)
-            with m1: st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:2em; color:#10b981;'>{data['tempo']}</span><br>BPM</div>", unsafe_allow_html=True)
-            with m2: st.markdown(f"<div class='metric-box'><b>ACCORDAGE</b><br><span style='font-size:2em; color:#58a6ff;'>{data['tuning']}</span><br>Hz</div>", unsafe_allow_html=True)
-            with m3:
-                btn_id = f"play_{hash(data['name'])}"
-                components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🎹 TESTER L'ACCORD</button>
-                                <script>{get_chord_js(btn_id, data['key'])}</script>""", height=110)
+            with results_container:
+                st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
+                color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
+                st.markdown(f"""
+                    <div class="report-card" style="background:{color};">
+                        <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{data['key'].upper()}</h1>
+                        <p style="font-size:1.5em; opacity:0.9;">CAMELOT: <b>{data['camelot']}</b> | CONFIANCE: <b>{data['conf']}%</b></p>
+                        {f"<div class='modulation-alert'> ⚠️ MODULATION DÉTECTÉE : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
+                    </div> """, unsafe_allow_html=True)
+                
+                m1, m2, m3 = st.columns(3)
+                with m1: st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:2em; color:#10b981;'>{data['tempo']}</span><br>BPM</div>", unsafe_allow_html=True)
+                with m2: st.markdown(f"<div class='metric-box'><b>ACCORDAGE</b><br><span style='font-size:2em; color:#58a6ff;'>{data['tuning']}</span><br>Hz</div>", unsafe_allow_html=True)
+                with m3:
+                    btn_id = f"play_{hash(data['name'])}"
+                    components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🎹 TESTER L'ACCORD</button>
+                                    <script>{get_chord_js(btn_id, data['key'])}</script>""", height=110)
 
-            c1, c2 = st.columns([2, 1])
-            with c1: 
-                fig_tl = px.line(pd.DataFrame(data['timeline']), x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
-                fig_tl.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
-                st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_plot_{i}")
-            with c2: 
-                fig_rd = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
-                fig_rd.update_layout(template="plotly_dark", height=300, polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30, r=30, t=20, b=20))
-                st.plotly_chart(fig_rd, use_container_width=True, key=f"rd_plot_{i}")
-            
-            st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
+                c1, c2 = st.columns([2, 1])
+                with c1: 
+                    fig_tl = px.line(pd.DataFrame(data['timeline']), x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
+                    fig_tl.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
+                    st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_plot_{hash(f.name)}")
+                with c2: 
+                    fig_rd = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
+                    fig_rd.update_layout(template="plotly_dark", height=300, polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30, r=30, t=20, b=20))
+                    st.plotly_chart(fig_rd, use_container_width=True, key=f"rd_plot_{hash(f.name)}")
+                
+                st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
+
+    # Une fois tout terminé
+    global_progress_placeholder.success(f"🎯 Analyse terminée pour les {total_files} fichiers.")
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
