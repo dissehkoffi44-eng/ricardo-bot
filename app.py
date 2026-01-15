@@ -1,3 +1,4 @@
+# Correction finale : Barre de progression globale en haut et support M4A
 import streamlit as st
 import librosa
 import numpy as np
@@ -116,31 +117,25 @@ def solve_key_sniper(chroma_vector, bass_vector):
 
 @st.cache_data(show_spinner=False)
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
-    # --- GESTION INTELLIGENTE DES FORMATS ---
     ext = file_name.split('.')[-1].lower()
-    
     try:
         if ext == 'm4a':
-            # Utilisation de Pydub pour les fichiers complexes (M4A)
             audio = AudioSegment.from_file(io.BytesIO(file_bytes), format="m4a")
             samples = np.array(audio.get_array_of_samples()).astype(np.float32)
             if audio.channels == 2:
                 samples = samples.reshape((-1, 2)).mean(axis=1)
-            y = samples / (2**15) # Normalisation
+            y = samples / (2**15)
             sr = audio.frame_rate
-            # Ré-échantillonnage pour sniper (22050Hz)
             if sr != 22050:
                 y = librosa.resample(y, orig_sr=sr, target_sr=22050)
                 sr = 22050
         else:
-            # Standard Librosa pour MP3, WAV, FLAC (plus rapide)
             with io.BytesIO(file_bytes) as buf:
                 y, sr = librosa.load(buf, sr=22050, mono=True)
     except Exception as e:
         st.error(f"Erreur de lecture du fichier {file_name}: {e}")
         return None
 
-    # --- LA SUITE DU CODE RESTE IDENTIQUE ---
     duration = librosa.get_duration(y=y, sr=sr)
     tuning = librosa.estimate_tuning(y=y, sr=sr)
     y_filt = apply_sniper_filters(y, sr)
@@ -167,7 +162,6 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
 
     if not votes: return None
 
-    # Synthèse finale
     most_common = votes.most_common(2)
     final_key = most_common[0][0]
     final_conf = int(np.mean([t['Conf'] for t in timeline if t['Note'] == final_key]) * 100)
@@ -184,19 +178,15 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         "target_key": target_key, "target_camelot": CAMELOT_MAP.get(target_key, "??") if target_key else None,
         "name": file_name
     }
-    
 
-    # --- TELEGRAM MULTIMEDIA ENRICHI ---
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             df_tl = pd.DataFrame(timeline)
             fig_tl = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
             img_tl = fig_tl.to_image(format="png", width=1000, height=500)
-
             fig_rd = go.Figure(data=go.Scatterpolar(r=res_obj['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
             fig_rd.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)))
             img_rd = fig_rd.to_image(format="png", width=600, height=600)
-
             caption = (f"🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
                        f"📂 *FICHIER:* `{file_name}`\n"
                        f"🎹 *TONALITÉ:* `{final_key.upper()}`\n"
@@ -205,14 +195,9 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
                        f"⏱ *TEMPO:* `{res_obj['tempo']} BPM`\n"
                        f"🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
                        f"{'⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else '✅ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
-
             files = {'p1': ('timeline.png', img_tl, 'image/png'), 'p2': ('radar.png', img_rd, 'image/png')}
-            media = [
-                {'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'},
-                {'type': 'photo', 'media': 'attach://p2'}
-            ]
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", 
-                          data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
+            media = [{'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'}, {'type': 'photo', 'media': 'attach://p2'}]
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
         except: pass
 
     del y, y_filt; gc.collect()
@@ -237,33 +222,30 @@ def get_chord_js(btn_id, key_str):
     }}; """
 
 # --- INTERFACE PRINCIPALE ---
-# --- INTERFACE PRINCIPALE ---
 st.title("🎯 RCDJ228 SNIPER M3")
 
 uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
-    # --- RÉSERVE L'ESPACE EN HAUT POUR LA PROGRESSION ---
-    global_progress_placeholder = st.empty() 
-    
+    # --- ZONE DE PROGRESSION GLOBALE (FIXE EN HAUT) ---
+    global_progress_placeholder = st.empty()
     total_files = len(uploaded_files)
     
-    # On utilise un conteneur pour que les résultats s'affichent en dessous
+    # Conteneur pour empiler les résultats en dessous
     results_container = st.container()
     
     for i, f in enumerate(reversed(uploaded_files)):
-        # Mise à jour de la barre globale (en haut)
+        # Mise à jour du bandeau de progression en haut
         overall_p = int(((i) / total_files) * 100)
         global_progress_placeholder.markdown(f"""
-            <div style="padding:10px; border-radius:10px; background-color:rgba(16, 185, 129, 0.1); border:1px solid #10b981; margin-bottom:20px;">
-                <p style="margin:0; font-weight:bold; color:#10b981;">📊 ANALYSE GLOBALE : {i+1} / {total_files}</p>
+            <div style="padding:15px; border-radius:15px; background-color:rgba(16, 185, 129, 0.1); border:1px solid #10b981; margin-bottom:20px;">
+                <h3 style="margin:0; color:#10b981;">📊 ANALYSE EN COURS : {i+1} / {total_files}</h3>
+                <p style="margin:5px 0 0 0; opacity:0.8;">Fichier actuel : {f.name}</p>
             </div>
             """, unsafe_allow_html=True)
-        # Note: On peut aussi ajouter une vraie barre st.progress ici si on veut
-        # global_progress_placeholder.progress(overall_p)
 
-        # Zone de statut pour le fichier actuel (apparaît juste au dessus du résultat)
-        with st.status(f"🎯 Traitement de : `{f.name}`", expanded=True) as status:
+        # Statut de traitement local
+        with st.status(f"🎯 Sniper scan : `{f.name}`", expanded=True) as status:
             inner_bar = st.progress(0)
             status_text = st.empty()
             
@@ -272,9 +254,9 @@ if uploaded_files:
                 status_text.code(msg)
 
             data = process_audio_precision(f.read(), f.name, _progress_callback=update_progress)
-            status.update(label=f"✅ {f.name} terminé", state="complete", expanded=False)
+            status.update(label=f"✅ {f.name} analysé", state="complete", expanded=False)
 
-        # Affichage des résultats dans le conteneur principal
+        # Rendu du résultat dans le conteneur global
         if data:
             with results_container:
                 st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
@@ -306,8 +288,8 @@ if uploaded_files:
                 
                 st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
 
-    # Une fois tout terminé
-    global_progress_placeholder.success(f"🎯 Analyse terminée pour les {total_files} fichiers.")
+    # Message final après la boucle
+    global_progress_placeholder.success(f"🎯 Mission terminée : {total_files} fichiers analysés avec succès !")
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
