@@ -124,7 +124,6 @@ def solve_key_sniper(chroma_vector, bass_vector):
 
 @st.cache_data(show_spinner=False)
 def process_audio_cached(file_bytes, file_name):
-    # On simule la barre de progression car st.progress ne marche pas bien dans une fonction cachée
     audio = AudioSegment.from_file(io.BytesIO(file_bytes))
     samples = np.array(audio.get_array_of_samples()).astype(np.float32)
     
@@ -174,7 +173,6 @@ def process_audio_cached(file_bytes, file_name):
         "name": file_name
     }
 
-    # Envoi Telegram
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             now = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -213,10 +211,21 @@ def get_chord_js(btn_id, key_str):
 st.title("🎯 RCDJ228 SNIPER M3")
 st.markdown("#### Système d'Analyse Harmonique Militaire | Intégration Cadence Parfaite")
 
+# --- BARRE DE PROGRESSION GLOBALE (CONTENEURS VIDES) ---
+global_progress_text = st.empty()
+global_progress_bar = st.empty()
+
 uploaded_files = st.file_uploader("📂 Déposez vos fichiers (Audio)", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
+    total_files = len(uploaded_files)
+    
     for i, f in enumerate(reversed(uploaded_files)):
+        # Mise à jour de la barre globale
+        progress_val = int((i / total_files) * 100)
+        global_progress_text.markdown(f"**Progression globale : {progress_val}%** ({i}/{total_files} fichiers traités)")
+        global_progress_bar.progress(progress_val)
+        
         file_bytes = f.read()
         with st.spinner(f"Analyse chirurgicale de {f.name}..."):
             data = process_audio_cached(file_bytes, f.name)
@@ -254,6 +263,10 @@ if uploaded_files:
                 st.plotly_chart(fig_radar, use_container_width=True, key=f"rd_{i}")
             
             st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
+
+    # Finalisation de la barre
+    global_progress_text.markdown("✅ **Analyse complète terminée ! (100%)**")
+    global_progress_bar.progress(100)
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
