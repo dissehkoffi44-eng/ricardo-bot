@@ -114,7 +114,7 @@ def solve_key_sniper(chroma_vector, bass_vector):
     return {"key": best_key, "score": best_overall_score}
 
 @st.cache_data(show_spinner=False)
-def process_audio_precision(file_bytes, file_name, progress_callback=None):
+def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     with io.BytesIO(file_bytes) as buf:
         y, sr = librosa.load(buf, sr=22050, mono=True)
     
@@ -128,9 +128,9 @@ def process_audio_precision(file_bytes, file_name, progress_callback=None):
     
     for idx, start in enumerate(segments):
         # Mise à jour de la barre dynamique si callback présent
-        if progress_callback:
+        if _progress_callback:
             prog_internal = int((idx / total_segments) * 100)
-            progress_callback(prog_internal, f"Scan harmonique : {start}s / {int(duration)}s")
+            _progress_callback(prog_internal, f"Scan harmonique : {start}s / {int(duration)}s")
 
         idx_start, idx_end = int(start * sr), int((start + step) * sr)
         seg = y_filt[idx_start:idx_end]
@@ -240,7 +240,8 @@ if uploaded_files:
                     inner_bar.progress(val)
                     status_text.code(msg)
 
-                data = process_audio_precision(f.read(), f.name, progress_callback=update_progress)
+                # Utilisation du paramètre haché par underscore
+                data = process_audio_precision(f.read(), f.name, _progress_callback=update_progress)
                 status.update(label=f"✅ {f.name} terminé", state="complete", expanded=False)
                 
             # Nettoyage des barres temporaires pour le fichier suivant
