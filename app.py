@@ -4,11 +4,13 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 from collections import Counter
 import io
 import os
 import requests
 import gc
+import json
 import streamlit.components.v1 as components
 from scipy.signal import butter, lfilter
 from datetime import datetime
@@ -173,17 +175,46 @@ def process_audio_cached(file_bytes, file_name):
         "name": file_name
     }
 
+    # --- ENVOI TELEGRAM AVEC GRAPHIQUES ---
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             now = datetime.now().strftime("%d/%m/%Y %H:%M")
-            mod_text = f" *MODULATION:* `{target_key.upper()}` ({res_obj['target_camelot']})" if mod_detected else " *STABILITÉ:* Excellente"
-            caption = (f" *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n *FICHIER:* `{file_name}`\n *DATE:* `{now}`\n\n"
-                       f" *TONALITÉ:* `{final_key.upper()}`\n *CAMELOT:* `{res_obj['camelot']}`\n *CONFIANCE:* `{res_obj['conf']}%`\n"
+            mod_text = f" 🎯 *MODULATION:* `{target_key.upper()}` ({res_obj['target_camelot']})" if mod_detected else " ✅ *STABILITÉ:* Excellente"
+            
+            caption = (f"🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
+                       f"📁 *FICHIER:* `{file_name}`\n"
+                       f"📅 *DATE:* `{now}`\n\n"
+                       f"🎹 *TONALITÉ:* `{final_key.upper()}`\n"
+                       f"🌀 *CAMELOT:* `{res_obj['camelot']}`\n"
+                       f"🔥 *CONFIANCE:* `{res_obj['conf']}%`\n"
+                       f"🥁 *TEMPO:* `{res_obj['tempo']} BPM`\n"
                        f"{mod_text}\n━━━━━━━━━━━━")
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                          data={'chat_id': CHAT_ID, 'text': caption, 'parse_mode': 'Markdown'}, timeout=10)
-        except:
-            pass
+
+            # Génération des images en mémoire
+            df_tl = pd.DataFrame(timeline)
+            fig_tl = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
+            fig_tl.update_layout(title="Chronologie Harmonique")
+            img_tl = fig_tl.to_image(format="png", width=1000, height=500)
+
+            fig_rd = go.Figure(data=go.Scatterpolar(r=chroma_avg.tolist(), theta=NOTES_LIST, fill='toself', line_color='#10b981'))
+            fig_rd.update_layout(template="plotly_dark", title="Signature Chromatique", polar=dict(radialaxis=dict(visible=False)))
+            img_rd = fig_rd.to_image(format="png", width=600, height=600)
+
+            # Envoi sous forme d'album (Media Group)
+            files = {
+                'p1': ('timeline.png', img_tl, 'image/png'),
+                'p2': ('radar.png', img_rd, 'image/png')
+            }
+            media = [
+                {'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'},
+                {'type': 'photo', 'media': 'attach://p2'}
+            ]
+            
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", 
+                          data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, 
+                          files=files, timeout=20)
+        except Exception as e:
+            st.error(f"Erreur d'envoi Telegram : {e}")
 
     del y, y_filt; gc.collect()
     return res_obj
@@ -222,8 +253,8 @@ if uploaded_files:
     
     for i, f in enumerate(reversed(uploaded_files)):
         # Mise à jour de la barre globale
-        progress_val = int((i / total_files) * 100)
-        global_progress_text.markdown(f"**Progression globale : {progress_val}%** ({i}/{total_files} fichiers traités)")
+        progress_val = int(((i + 1) / total_files) * 100)
+        global_progress_text.markdown(f"**Progression globale : {progress_val}%** ({i+1}/{total_files} fichiers traités)")
         global_progress_bar.progress(progress_val)
         
         file_bytes = f.read()
