@@ -13,6 +13,7 @@ import json
 import streamlit.components.v1 as components
 from scipy.signal import butter, lfilter
 from datetime import datetime
+from pydub import AudioSegment
 
 # --- FORCE FFMEG PATH (WINDOWS FIX) ---
 if os.path.exists(r'C:\ffmpeg\bin'):
@@ -115,9 +116,31 @@ def solve_key_sniper(chroma_vector, bass_vector):
 
 @st.cache_data(show_spinner=False)
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
-    with io.BytesIO(file_bytes) as buf:
-        y, sr = librosa.load(buf, sr=22050, mono=True)
+    # --- GESTION INTELLIGENTE DES FORMATS ---
+    ext = file_name.split('.')[-1].lower()
     
+    try:
+        if ext == 'm4a':
+            # Utilisation de Pydub pour les fichiers complexes (M4A)
+            audio = AudioSegment.from_file(io.BytesIO(file_bytes), format="m4a")
+            samples = np.array(audio.get_array_of_samples()).astype(np.float32)
+            if audio.channels == 2:
+                samples = samples.reshape((-1, 2)).mean(axis=1)
+            y = samples / (2**15) # Normalisation
+            sr = audio.frame_rate
+            # Ré-échantillonnage pour sniper (22050Hz)
+            if sr != 22050:
+                y = librosa.resample(y, orig_sr=sr, target_sr=22050)
+                sr = 22050
+        else:
+            # Standard Librosa pour MP3, WAV, FLAC (plus rapide)
+            with io.BytesIO(file_bytes) as buf:
+                y, sr = librosa.load(buf, sr=22050, mono=True)
+    except Exception as e:
+        st.error(f"Erreur de lecture du fichier {file_name}: {e}")
+        return None
+
+    # --- LA SUITE DU CODE RESTE IDENTIQUE ---
     duration = librosa.get_duration(y=y, sr=sr)
     tuning = librosa.estimate_tuning(y=y, sr=sr)
     y_filt = apply_sniper_filters(y, sr)
@@ -127,7 +150,6 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     total_segments = len(segments)
     
     for idx, start in enumerate(segments):
-        # Mise à jour de la barre dynamique si callback présent
         if _progress_callback:
             prog_internal = int((idx / total_segments) * 100)
             _progress_callback(prog_internal, f"Scan harmonique : {start}s / {int(duration)}s")
@@ -145,6 +167,7 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
 
     if not votes: return None
 
+    # Synthèse finale
     most_common = votes.most_common(2)
     final_key = most_common[0][0]
     final_conf = int(np.mean([t['Conf'] for t in timeline if t['Note'] == final_key]) * 100)
@@ -161,6 +184,7 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         "target_key": target_key, "target_camelot": CAMELOT_MAP.get(target_key, "??") if target_key else None,
         "name": file_name
     }
+    
 
     # --- TELEGRAM MULTIMEDIA ENRICHI ---
     if TELEGRAM_TOKEN and CHAT_ID:
