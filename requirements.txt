@@ -5,5 +5,5 @@ pandas
 plotly
 scipy
 requests
-kaleido==0.1.0post1
+kaleido==0.2.1
 pydub
