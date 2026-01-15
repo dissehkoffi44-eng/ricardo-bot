@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.io as pio
 from collections import Counter
 import io
 import os
@@ -14,7 +13,6 @@ import json
 import streamlit.components.v1 as components
 from scipy.signal import butter, lfilter
 from datetime import datetime
-from pydub import AudioSegment
 
 # --- FORCE FFMEG PATH (WINDOWS FIX) ---
 if os.path.exists(r'C:\ffmpeg\bin'):
@@ -76,26 +74,19 @@ st.markdown("""
         background: #161b22; border-radius: 15px; padding: 20px; text-align: center; border: 1px solid #30363d;
         height: 100%; transition: 0.3s;
     }
-    .metric-box:hover { border-color: #58a6ff; }
-    .sniper-badge {
-        background: #238636; color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.7em;
-    }
     </style>
     """, unsafe_allow_html=True)
 
 # --- MOTEURS DE CALCUL ---
-
 def apply_sniper_filters(y, sr):
     y_harm = librosa.effects.harmonic(y, margin=4.0)
     nyq = 0.5 * sr
-    low = max(0.001, 80/nyq)
-    high = min(0.999, 5000/nyq)
-    b, a = butter(4, [low, high], btype='band')
+    b, a = butter(4, [80/nyq, 5000/nyq], btype='band')
     return lfilter(b, a, y_harm)
 
 def get_bass_priority(y, sr):
     nyq = 0.5 * sr
-    b, a = butter(2, min(0.999, 150/nyq), btype='low')
+    b, a = butter(2, 150/nyq, btype='low')
     y_bass = lfilter(b, a, y)
     chroma_bass = librosa.feature.chroma_cqt(y=y_bass, sr=sr, n_chroma=12)
     return np.mean(chroma_bass, axis=1)
@@ -110,10 +101,8 @@ def solve_key_sniper(chroma_vector, bass_vector):
             for i in range(12):
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
                 if mode == "minor":
-                    dom_idx = (i + 7) % 12 
-                    leading_tone = (i + 11) % 12
-                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35:
-                        score *= 1.35 
+                    dom_idx, leading_tone = (i + 7) % 12, (i + 11) % 12
+                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35: score *= 1.35 
                 if bv[i] > 0.6: score += (bv[i] * 0.2)
                 fifth_idx = (i + 7) % 12
                 if cv[fifth_idx] > 0.5: score += 0.1
@@ -125,34 +114,21 @@ def solve_key_sniper(chroma_vector, bass_vector):
     return {"key": best_key, "score": best_overall_score}
 
 @st.cache_data(show_spinner=False)
-def process_audio_cached(file_bytes, file_name):
-    audio = AudioSegment.from_file(io.BytesIO(file_bytes))
-    # Harmonisation avec Code 1 : Forcer échantillonnage 16-bit
-    audio = audio.set_sample_width(2)
-    samples = np.array(audio.get_array_of_samples()).astype(np.float32)
-    
-    if audio.channels == 2:
-        samples = samples.reshape((-1, 2)).mean(axis=1)
-    
-    # Correction de normalisation pour correspondre au moteur Librosa du Code 1
-    y = samples / 32768.0
-    sr = audio.frame_rate
-
-    if sr != 22050:
-        y = librosa.resample(y, orig_sr=sr, target_sr=22050)
-        sr = 22050
+def process_audio_precision(file_bytes, file_name):
+    with io.BytesIO(file_bytes) as buf:
+        y, sr = librosa.load(buf, sr=22050, mono=True)
     
     duration = librosa.get_duration(y=y, sr=sr)
     tuning = librosa.estimate_tuning(y=y, sr=sr)
     y_filt = apply_sniper_filters(y, sr)
 
     step, timeline, votes = 6, [], Counter()
-    segments = range(0, int(duration) - step, 2)
+    segments = list(range(0, max(1, int(duration) - step), 2))
     
     for start in segments:
         idx_start, idx_end = int(start * sr), int((start + step) * sr)
         seg = y_filt[idx_start:idx_end]
-        if np.max(np.abs(seg)) < 0.01: continue
+        if len(seg) < 1000 or np.max(np.abs(seg)) < 0.01: continue
         c_raw = librosa.feature.chroma_cqt(y=seg, sr=sr, tuning=tuning, n_chroma=24, bins_per_octave=24)
         c_avg = np.mean((c_raw[::2, :] + c_raw[1::2, :]) / 2, axis=1)
         b_seg = get_bass_priority(y[idx_start:idx_end], sr)
@@ -161,10 +137,12 @@ def process_audio_cached(file_bytes, file_name):
         votes[res['key']] += int(res['score'] * 100 * weight)
         timeline.append({"Temps": start, "Note": res['key'], "Conf": res['score']})
 
+    if not votes: return None
+
     most_common = votes.most_common(2)
     final_key = most_common[0][0]
     final_conf = int(np.mean([t['Conf'] for t in timeline if t['Note'] == final_key]) * 100)
-    mod_detected = len(most_common) > 1 and (votes[most_common[1][0]] / sum(votes.values())) > 0.25
+    mod_detected = len(most_common) > 1 and (votes[most_common[1][0]] / max(1, sum(votes.values()))) > 0.25
     target_key = most_common[1][0] if mod_detected else None
     tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
     chroma_avg = np.mean(librosa.feature.chroma_cqt(y=y_filt, sr=sr, tuning=tuning), axis=1)
@@ -178,46 +156,35 @@ def process_audio_cached(file_bytes, file_name):
         "name": file_name
     }
 
-    # --- ENVOI TELEGRAM AVEC GRAPHIQUES ---
+    # --- TELEGRAM MULTIMEDIA ENRICHI ---
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
-            now = datetime.now().strftime("%d/%m/%Y %H:%M")
-            mod_text = f" 🎯 *MODULATION:* `{target_key.upper()}` ({res_obj['target_camelot']})" if mod_detected else " ✅ *STABILITÉ:* Excellente"
-            
+            # Génération des visuels pour le rapport mobile
+            df_tl = pd.DataFrame(timeline)
+            fig_tl = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
+            img_tl = fig_tl.to_image(format="png", width=1000, height=500)
+
+            fig_rd = go.Figure(data=go.Scatterpolar(r=res_obj['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
+            fig_rd.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)))
+            img_rd = fig_rd.to_image(format="png", width=600, height=600)
+
             caption = (f"🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
-                       f"📁 *FICHIER:* `{file_name}`\n"
-                       f"📅 *DATE:* `{now}`\n\n"
+                       f"📂 *FICHIER:* `{file_name}`\n"
                        f"🎹 *TONALITÉ:* `{final_key.upper()}`\n"
                        f"🌀 *CAMELOT:* `{res_obj['camelot']}`\n"
                        f"🔥 *CONFIANCE:* `{res_obj['conf']}%`\n"
-                       f"🥁 *TEMPO:* `{res_obj['tempo']} BPM`\n"
-                       f"{mod_text}\n━━━━━━━━━━━━")
+                       f"⏱ *TEMPO:* `{res_obj['tempo']} BPM`\n"
+                       f"🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
+                       f"{'⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else '✅ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
 
-            # Génération des images en mémoire
-            df_tl = pd.DataFrame(timeline)
-            fig_tl = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
-            fig_tl.update_layout(title="Chronologie Harmonique")
-            img_tl = fig_tl.to_image(format="png", width=1000, height=500)
-
-            fig_rd = go.Figure(data=go.Scatterpolar(r=chroma_avg.tolist(), theta=NOTES_LIST, fill='toself', line_color='#10b981'))
-            fig_rd.update_layout(template="plotly_dark", title="Signature Chromatique", polar=dict(radialaxis=dict(visible=False)))
-            img_rd = fig_rd.to_image(format="png", width=600, height=600)
-
-            # Envoi sous forme d'album (Media Group)
-            files = {
-                'p1': ('timeline.png', img_tl, 'image/png'),
-                'p2': ('radar.png', img_rd, 'image/png')
-            }
+            files = {'p1': ('timeline.png', img_tl, 'image/png'), 'p2': ('radar.png', img_rd, 'image/png')}
             media = [
                 {'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'},
                 {'type': 'photo', 'media': 'attach://p2'}
             ]
-            
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", 
-                          data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, 
-                          files=files, timeout=20)
-        except Exception as e:
-            st.error(f"Erreur d'envoi Telegram : {e}")
+                          data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
+        except: pass
 
     del y, y_filt; gc.collect()
     return res_obj
@@ -238,73 +205,57 @@ def get_chord_js(btn_id, key_str):
             o.connect(g); g.connect(ctx.destination);
             o.start(); o.stop(ctx.currentTime + 2.0);
         }});
-    }};
-    """
+    }}; """
 
-# --- DASHBOARD PRINCIPAL ---
+# --- INTERFACE PRINCIPALE ---
 st.title("🎯 RCDJ228 SNIPER M3")
-st.markdown("#### Système d'Analyse Harmonique Militaire | Intégration Cadence Parfaite")
-
-# --- BARRE DE PROGRESSION GLOBALE (CONTENEURS VIDES) ---
 global_progress_text = st.empty()
 global_progress_bar = st.empty()
 
-uploaded_files = st.file_uploader("📂 Déposez vos fichiers (Audio)", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
-    total_files = len(uploaded_files)
-    
+    total = len(uploaded_files)
     for i, f in enumerate(reversed(uploaded_files)):
-        # Mise à jour de la barre globale
-        progress_val = int(((i + 1) / total_files) * 100)
-        global_progress_text.markdown(f"**Progression globale : {progress_val}%** ({i+1}/{total_files} fichiers traités)")
-        global_progress_bar.progress(progress_val)
+        p_val = int(((i + 1) / total) * 100)
+        global_progress_text.markdown(f"**Analyse en cours ({i+1}/{total}) :** `{f.name}`")
+        global_progress_bar.progress(p_val)
         
-        file_bytes = f.read()
-        with st.spinner(f"Analyse chirurgicale de {f.name}..."):
-            data = process_audio_cached(file_bytes, f.name)
+        data = process_audio_precision(f.read(), f.name)
         
-        with st.container():
-            st.markdown(f"<div class='file-header'> ANALYSE #{len(uploaded_files)-i} : {data['name']}</div>", unsafe_allow_html=True)
+        if data:
+            st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
             color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
             st.markdown(f"""
                 <div class="report-card" style="background:{color};">
-                    <p style="letter-spacing:5px; opacity:0.8; font-size:0.8em;">SNIPER ENGINE v5.0 <span class="sniper-badge">READY</span></p>
                     <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{data['key'].upper()}</h1>
-                    <p style="font-size:1.5em; opacity:0.9;">CAMELOT: <b>{data['camelot']}</b> &nbsp; | &nbsp; CONFIANCE: <b>{data['conf']}%</b></p>
-                    {f"<div class='modulation-alert'> MODULATION : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
-                </div>
-            """, unsafe_allow_html=True)
+                    <p style="font-size:1.5em; opacity:0.9;">CAMELOT: <b>{data['camelot']}</b> | CONFIANCE: <b>{data['conf']}%</b></p>
+                    {f"<div class='modulation-alert'> ⚠️ MODULATION DÉTECTÉE : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
+                </div> """, unsafe_allow_html=True)
             
             m1, m2, m3 = st.columns(3)
             with m1: st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:2em; color:#10b981;'>{data['tempo']}</span><br>BPM</div>", unsafe_allow_html=True)
             with m2: st.markdown(f"<div class='metric-box'><b>ACCORDAGE</b><br><span style='font-size:2em; color:#58a6ff;'>{data['tuning']}</span><br>Hz</div>", unsafe_allow_html=True)
             with m3:
-                test_btn_id = f"play_{i}"
-                components.html(f"""
-                    <button id="{test_btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;"> TESTER L'ACCORD</button>
-                    <script>{get_chord_js(test_btn_id, data['key'])}</script>
-                """, height=110)
+                btn_id = f"play_{hash(data['name'])}"
+                components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🎹 TESTER L'ACCORD</button>
+                                <script>{get_chord_js(btn_id, data['key'])}</script>""", height=110)
 
             c1, c2 = st.columns([2, 1])
-            with c1:
+            with c1: 
                 fig_tl = px.line(pd.DataFrame(data['timeline']), x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
-                fig_tl.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_{i}")
-            with c2:
-                fig_radar = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
-                fig_radar.update_layout(template="plotly_dark", height=300, margin=dict(l=40, r=40, t=30, b=20), polar=dict(radialaxis=dict(visible=False)), paper_bgcolor='rgba(0,0,0,0)')
-                st.plotly_chart(fig_radar, use_container_width=True, key=f"rd_{i}")
+                fig_tl.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
+                st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_plot_{i}")
+            with c2: 
+                fig_rd = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
+                fig_rd.update_layout(template="plotly_dark", height=300, polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30, r=30, t=20, b=20))
+                st.plotly_chart(fig_rd, use_container_width=True, key=f"rd_plot_{i}")
             
             st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
-
-    # Finalisation de la barre
-    global_progress_text.markdown("✅ **Analyse complète terminée ! (100%)**")
-    global_progress_bar.progress(100)
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
     st.header("Sniper Control")
-    if st.button("🗑️ Vider la file d'analyse"):
+    if st.button("🧹 Vider la file d'analyse"):
         st.cache_data.clear()
         st.rerun()
