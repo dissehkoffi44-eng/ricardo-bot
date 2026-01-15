@@ -114,7 +114,7 @@ def solve_key_sniper(chroma_vector, bass_vector):
     return {"key": best_key, "score": best_overall_score}
 
 @st.cache_data(show_spinner=False)
-def process_audio_precision(file_bytes, file_name):
+def process_audio_precision(file_bytes, file_name, progress_callback=None):
     with io.BytesIO(file_bytes) as buf:
         y, sr = librosa.load(buf, sr=22050, mono=True)
     
@@ -124,8 +124,14 @@ def process_audio_precision(file_bytes, file_name):
 
     step, timeline, votes = 6, [], Counter()
     segments = list(range(0, max(1, int(duration) - step), 2))
+    total_segments = len(segments)
     
-    for start in segments:
+    for idx, start in enumerate(segments):
+        # Mise à jour de la barre dynamique si callback présent
+        if progress_callback:
+            prog_internal = int((idx / total_segments) * 100)
+            progress_callback(prog_internal, f"Scan harmonique : {start}s / {int(duration)}s")
+
         idx_start, idx_end = int(start * sr), int((start + step) * sr)
         seg = y_filt[idx_start:idx_end]
         if len(seg) < 1000 or np.max(np.abs(seg)) < 0.01: continue
@@ -159,7 +165,6 @@ def process_audio_precision(file_bytes, file_name):
     # --- TELEGRAM MULTIMEDIA ENRICHI ---
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
-            # Génération des visuels pour le rapport mobile
             df_tl = pd.DataFrame(timeline)
             fig_tl = px.line(df_tl, x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
             img_tl = fig_tl.to_image(format="png", width=1000, height=500)
@@ -209,20 +214,38 @@ def get_chord_js(btn_id, key_str):
 
 # --- INTERFACE PRINCIPALE ---
 st.title("🎯 RCDJ228 SNIPER M3")
-global_progress_text = st.empty()
-global_progress_bar = st.empty()
 
 uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
-    total = len(uploaded_files)
+    total_files = len(uploaded_files)
+    
+    # Zone de progression dynamique
+    progress_container = st.container()
+    
     for i, f in enumerate(reversed(uploaded_files)):
-        p_val = int(((i + 1) / total) * 100)
-        global_progress_text.markdown(f"**Analyse en cours ({i+1}/{total}) :** `{f.name}`")
-        global_progress_bar.progress(p_val)
-        
-        data = process_audio_precision(f.read(), f.name)
-        
+        # Affichage du statut global et interne
+        with progress_container:
+            overall_p = int(((i) / total_files) * 100)
+            st.markdown(f"**Analyse globale : {i+1}/{total_files}**")
+            main_bar = st.progress(overall_p)
+            
+            # Utilisation de st.status pour une barre de progression interne élégante
+            with st.status(f"🎯 Traitement de : `{f.name}`", expanded=True) as status:
+                inner_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Callback pour mettre à jour l'interface pendant l'analyse
+                def update_progress(val, msg):
+                    inner_bar.progress(val)
+                    status_text.code(msg)
+
+                data = process_audio_precision(f.read(), f.name, progress_callback=update_progress)
+                status.update(label=f"✅ {f.name} terminé", state="complete", expanded=False)
+                
+            # Nettoyage des barres temporaires pour le fichier suivant
+            main_bar.empty()
+
         if data:
             st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
             color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
