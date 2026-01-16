@@ -156,7 +156,7 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         c_avg = np.mean((c_raw[::2, :] + c_raw[1::2, :]) / 2, axis=1)
         b_seg = get_bass_priority(y[idx_start:idx_end], sr)
         res = solve_key_sniper(c_avg, b_seg)
-        if res['score'] < 0.6: 
+        if res['score'] < 0.7: 
             continue
         weight = 2.0 if (start < 10 or start > (duration - 15)) else 1.0
         votes[res['key']] += int(res['score'] * 100 * weight)
