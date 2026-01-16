@@ -1,4 +1,4 @@
-# Correction finale : Barre de progression globale en haut et support M4A
+# RCDJ228 SNIPER M3 - VERSION FINALE CORRIGÉE
 import streamlit as st
 import librosa
 import numpy as np
@@ -115,7 +115,7 @@ def solve_key_sniper(chroma_vector, bass_vector):
                     best_key = f"{NOTES_LIST[i]} {mode}"
     return {"key": best_key, "score": best_overall_score}
 
-@st.cache_data(show_spinner=False)
+# ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     ext = file_name.split('.')[-1].lower()
     try:
@@ -227,16 +227,12 @@ st.title("🎯 RCDJ228 SNIPER M3")
 uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
-    # --- ZONE DE PROGRESSION GLOBALE (FIXE EN HAUT) ---
     global_progress_placeholder = st.empty()
     total_files = len(uploaded_files)
-    
-    # Conteneur pour empiler les résultats en dessous
     results_container = st.container()
     
     for i, f in enumerate(reversed(uploaded_files)):
-        # Mise à jour du bandeau de progression en haut
-        overall_p = int(((i) / total_files) * 100)
+        # Mise à jour de la barre globale en haut
         global_progress_placeholder.markdown(f"""
             <div style="padding:15px; border-radius:15px; background-color:rgba(16, 185, 129, 0.1); border:1px solid #10b981; margin-bottom:20px;">
                 <h3 style="margin:0; color:#10b981;">📊 ANALYSE EN COURS : {i+1} / {total_files}</h3>
@@ -244,7 +240,6 @@ if uploaded_files:
             </div>
             """, unsafe_allow_html=True)
 
-        # Statut de traitement local
         with st.status(f"🎯 Sniper scan : `{f.name}`", expanded=True) as status:
             inner_bar = st.progress(0)
             status_text = st.empty()
@@ -253,10 +248,11 @@ if uploaded_files:
                 inner_bar.progress(val)
                 status_text.code(msg)
 
-            data = process_audio_precision(f.read(), f.name, _progress_callback=update_progress)
+            # Lecture stable des octets
+            audio_bytes = f.getvalue()
+            data = process_audio_precision(audio_bytes, f.name, _progress_callback=update_progress)
             status.update(label=f"✅ {f.name} analysé", state="complete", expanded=False)
 
-        # Rendu du résultat dans le conteneur global
         if data:
             with results_container:
                 st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
@@ -288,7 +284,6 @@ if uploaded_files:
                 
                 st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
 
-    # Message final après la boucle
     global_progress_placeholder.success(f"🎯 Mission terminée : {total_files} fichiers analysés avec succès !")
 
 with st.sidebar:
