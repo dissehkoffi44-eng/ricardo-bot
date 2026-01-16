@@ -96,23 +96,47 @@ def get_bass_priority(y, sr):
 def solve_key_sniper(chroma_vector, bass_vector):
     best_overall_score = -1
     best_key = "Unknown"
+    
+    # Normalisation des vecteurs pour une comparaison équitable
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
     bv = (bass_vector - bass_vector.min()) / (bass_vector.max() - bass_vector.min() + 1e-6)
+    
     for p_name, p_data in PROFILES.items():
         for mode in ["major", "minor"]:
             for i in range(12):
+                # 1. Corrélation de base avec le profil (Krumhansl, Temperley, etc.)
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
-                if mode == "minor":
-                    dom_idx, leading_tone = (i + 7) % 12, (i + 11) % 12
-                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35: score *= 1.35 
-                if bv[i] > 0.6: score += (bv[i] * 0.2)
+                
+                # 2. RENFORCEMENT DE LA FONDAMENTALE (BASSE)
+                # Si la basse détectée correspond à la tonique testée (i), on booste massivement.
+                if bv[i] > 0.7:
+                    score *= 1.4  # La basse est le pilier de la tonique
+                
+                # 3. FILTRE ANTI-DOMINANTE (L'erreur classique du V au lieu du I)
+                # On regarde la quinte (i+7). Si la quinte est beaucoup plus forte 
+                # que la tonique testée, c'est suspect.
                 fifth_idx = (i + 7) % 12
-                if cv[fifth_idx] > 0.5: score += 0.1
-                third_idx = (i + 4) % 12 if mode == "major" else (i + 3) % 12
-                if cv[third_idx] > 0.5: score += 0.1
+                if cv[fifth_idx] > cv[i] * 1.2:
+                    score *= 0.85 # On pénalise si la dominante "écrase" la tonique
+                
+                # 4. BONUS DE CONFIRMATION PAR LA QUARTE (SOUS-DOMINANTE)
+                # La présence de la quarte (i+5) est un excellent indicateur de la tonique.
+                fourth_idx = (i + 5) % 12
+                if cv[fourth_idx] > 0.4:
+                    score += 0.1
+                
+                # 5. LOGIQUE SPÉCIFIQUE AU MODE MINEUR (Cadence et Sensible)
+                if mode == "minor":
+                    leading_tone = (i + 11) % 12
+                    # Si on entend la sensible, c'est une preuve de tonalité mineure harmonique/mélodique
+                    if cv[leading_tone] > 0.35:
+                        score *= 1.2
+                
+                # Sauvegarde du meilleur candidat
                 if score > best_overall_score:
                     best_overall_score = score
                     best_key = f"{NOTES_LIST[i]} {mode}"
+                    
     return {"key": best_key, "score": best_overall_score}
 
 # ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
