@@ -96,47 +96,23 @@ def get_bass_priority(y, sr):
 def solve_key_sniper(chroma_vector, bass_vector):
     best_overall_score = -1
     best_key = "Unknown"
-    
-    # Normalisation des vecteurs pour une comparaison équitable
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
     bv = (bass_vector - bass_vector.min()) / (bass_vector.max() - bass_vector.min() + 1e-6)
-    
     for p_name, p_data in PROFILES.items():
         for mode in ["major", "minor"]:
             for i in range(12):
-                # 1. Corrélation de base avec le profil (Krumhansl, Temperley, etc.)
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
-                
-                # 2. RENFORCEMENT DE LA FONDAMENTALE (BASSE)
-                # Si la basse détectée correspond à la tonique testée (i), on booste massivement.
-                if bv[i] > 0.7:
-                    score *= 1.4  # La basse est le pilier de la tonique
-                
-                # 3. FILTRE ANTI-DOMINANTE (L'erreur classique du V au lieu du I)
-                # On regarde la quinte (i+7). Si la quinte est beaucoup plus forte 
-                # que la tonique testée, c'est suspect.
-                fifth_idx = (i + 7) % 12
-                if cv[fifth_idx] > cv[i] * 1.2:
-                    score *= 0.85 # On pénalise si la dominante "écrase" la tonique
-                
-                # 4. BONUS DE CONFIRMATION PAR LA QUARTE (SOUS-DOMINANTE)
-                # La présence de la quarte (i+5) est un excellent indicateur de la tonique.
-                fourth_idx = (i + 5) % 12
-                if cv[fourth_idx] > 0.4:
-                    score += 0.1
-                
-                # 5. LOGIQUE SPÉCIFIQUE AU MODE MINEUR (Cadence et Sensible)
                 if mode == "minor":
-                    leading_tone = (i + 11) % 12
-                    # Si on entend la sensible, c'est une preuve de tonalité mineure harmonique/mélodique
-                    if cv[leading_tone] > 0.35:
-                        score *= 1.2
-                
-                # Sauvegarde du meilleur candidat
+                    dom_idx, leading_tone = (i + 7) % 12, (i + 11) % 12
+                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35: score *= 1.35 
+                if bv[i] > 0.6: score += (bv[i] * 0.2)
+                fifth_idx = (i + 7) % 12
+                if cv[fifth_idx] > 0.5: score += 0.1
+                third_idx = (i + 4) % 12 if mode == "major" else (i + 3) % 12
+                if cv[third_idx] > 0.5: score += 0.1
                 if score > best_overall_score:
                     best_overall_score = score
                     best_key = f"{NOTES_LIST[i]} {mode}"
-                    
     return {"key": best_key, "score": best_overall_score}
 
 # ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
@@ -211,14 +187,14 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
             fig_rd = go.Figure(data=go.Scatterpolar(r=res_obj['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
             fig_rd.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)))
             img_rd = fig_rd.to_image(format="png", width=600, height=600)
-            caption = (f"🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
-                       f"📂 *FICHIER:* `{file_name}`\n"
-                       f"🎹 *TONALITÉ:* `{final_key.upper()}`\n"
-                       f"🌀 *CAMELOT:* `{res_obj['camelot']}`\n"
-                       f"🔥 *CONFIANCE:* `{res_obj['conf']}%`\n"
-                       f"⏱ *TEMPO:* `{res_obj['tempo']} BPM`\n"
-                       f"🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
-                       f"{'⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else '✅ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
+            caption = (f" *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
+                       f" *FICHIER:* `{file_name}`\n"
+                       f" *TONALITÉ:* `{final_key.upper()}`\n"
+                       f" *CAMELOT:* `{res_obj['camelot']}`\n"
+                       f" *CONFIANCE:* `{res_obj['conf']}%`\n"
+                       f" *TEMPO:* `{res_obj['tempo']} BPM`\n"
+                       f" *ACCORD:* `{res_obj['tuning']} Hz`\n"
+                       f"{' *MODULATION:* ' + target_key.upper() if mod_detected else ' *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
             files = {'p1': ('timeline.png', img_tl, 'image/png'), 'p2': ('radar.png', img_rd, 'image/png')}
             media = [{'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'}, {'type': 'photo', 'media': 'attach://p2'}]
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
@@ -248,7 +224,7 @@ def get_chord_js(btn_id, key_str):
 # --- INTERFACE PRINCIPALE ---
 st.title("🎯 RCDJ228 SNIPER M3")
 
-uploaded_files = st.file_uploader("📥 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📂 Déposez vos fichiers audio", type=['mp3','wav','flac','m4a'], accept_multiple_files=True)
 
 if uploaded_files:
     global_progress_placeholder = st.empty()
@@ -256,15 +232,14 @@ if uploaded_files:
     results_container = st.container()
     
     for i, f in enumerate(reversed(uploaded_files)):
-        # Mise à jour de la barre globale en haut
         global_progress_placeholder.markdown(f"""
             <div style="padding:15px; border-radius:15px; background-color:rgba(16, 185, 129, 0.1); border:1px solid #10b981; margin-bottom:20px;">
-                <h3 style="margin:0; color:#10b981;">📊 ANALYSE EN COURS : {i+1} / {total_files}</h3>
+                <h3 style="margin:0; color:#10b981;">🔍 ANALYSE EN COURS : {i+1} / {total_files}</h3>
                 <p style="margin:5px 0 0 0; opacity:0.8;">Fichier actuel : {f.name}</p>
             </div>
             """, unsafe_allow_html=True)
 
-        with st.status(f"🎯 Sniper scan : `{f.name}`", expanded=True) as status:
+        with st.status(f"🚀 Sniper scan : `{f.name}`", expanded=True) as status:
             inner_bar = st.progress(0)
             status_text = st.empty()
             
@@ -272,20 +247,19 @@ if uploaded_files:
                 inner_bar.progress(val)
                 status_text.code(msg)
 
-            # Lecture stable des octets
             audio_bytes = f.getvalue()
             data = process_audio_precision(audio_bytes, f.name, _progress_callback=update_progress)
             status.update(label=f"✅ {f.name} analysé", state="complete", expanded=False)
 
         if data:
             with results_container:
-                st.markdown(f"<div class='file-header'> ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='file-header'>📝 ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
                 color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
                 st.markdown(f"""
                     <div class="report-card" style="background:{color};">
                         <h1 style="font-size:5.5em; margin:10px 0; font-weight:900;">{data['key'].upper()}</h1>
                         <p style="font-size:1.5em; opacity:0.9;">CAMELOT: <b>{data['camelot']}</b> | CONFIANCE: <b>{data['conf']}%</b></p>
-                        {f"<div class='modulation-alert'> ⚠️ MODULATION DÉTECTÉE : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
+                        {f"<div class='modulation-alert'>⚠️ MODULATION DÉTECTÉE : {data['target_key'].upper()} ({data['target_camelot']})</div>" if data['modulation'] else ""}
                     </div> """, unsafe_allow_html=True)
                 
                 m1, m2, m3 = st.columns(3)
@@ -308,11 +282,11 @@ if uploaded_files:
                 
                 st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
 
-    global_progress_placeholder.success(f"🎯 Mission terminée : {total_files} fichiers analysés avec succès !")
+    global_progress_placeholder.success(f"🏁 Mission terminée : {total_files} fichiers analysés avec succès !")
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
     st.header("Sniper Control")
-    if st.button("🧹 Vider la file d'analyse"):
+    if st.button("🗑️ Vider la file d'analyse"):
         st.cache_data.clear()
         st.rerun()
