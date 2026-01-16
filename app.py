@@ -96,43 +96,25 @@ def get_bass_priority(y, sr):
 def solve_key_sniper(chroma_vector, bass_vector):
     best_overall_score = -1
     best_key = "Unknown"
-    
-    # Normalisation
     cv = (chroma_vector - chroma_vector.min()) / (chroma_vector.max() - chroma_vector.min() + 1e-6)
     bv = (bass_vector - bass_vector.min()) / (bass_vector.max() - bass_vector.min() + 1e-6)
-    
     for p_name, p_data in PROFILES.items():
         for mode in ["major", "minor"]:
             for i in range(12):
-                # 1. Corrélation de base avec le profil (Krumhansl, etc.)
                 score = np.corrcoef(cv, np.roll(p_data[mode], i))[0, 1]
-                
-                # --- BOOST CADENCE PARFAITE (V -> I) ---
-                dom_idx = (i + 7) % 12  # La quinte (Dominante)
-                
                 if mode == "minor":
-                    # En mineur, on cherche souvent la sensible (i+11) pour une cadence parfaite (V majeur -> i mineur)
-                    leading_tone = (i + 11) % 12
-                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35:
-                        score *= 1.45  # Boost augmenté (était 1.35)
-                else:
-                    # En majeur, on booste si la dominante est bien présente
-                    if cv[dom_idx] > 0.5:
-                        score *= 1.25  # Boost de 25% pour la présence de la dominante
-                
-                # --- BOOST BASSES (Fondamentale) ---
-                if bv[i] > 0.6: 
-                    score += (bv[i] * 0.3) # Poids des basses augmenté (était 0.2)
-
-                # --- VÉRIFICATION DE LA TONIQUE ---
-                if cv[i] > 0.6: # Si la note fondamentale elle-même est puissante
-                    score += 0.15
-
+                    dom_idx, leading_tone = (i + 7) % 12, (i + 11) % 12
+                    if cv[dom_idx] > 0.45 and cv[leading_tone] > 0.35: score *= 1.35 
+                if bv[i] > 0.6: score += (bv[i] * 0.2)
+                fifth_idx = (i + 7) % 12
+                if cv[fifth_idx] > 0.5: score += 0.1
+                third_idx = (i + 4) % 12 if mode == "major" else (i + 3) % 12
+                if cv[third_idx] > 0.5: score += 0.1
                 if score > best_overall_score:
                     best_overall_score = score
                     best_key = f"{NOTES_LIST[i]} {mode}"
-                    
     return {"key": best_key, "score": best_overall_score}
+
 # ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     ext = file_name.split('.')[-1].lower()
