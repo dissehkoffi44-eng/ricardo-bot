@@ -140,8 +140,8 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     tuning = librosa.estimate_tuning(y=y, sr=sr)
     y_filt = apply_sniper_filters(y, sr)
 
-    step, timeline, votes = 6, [], Counter()
-    segments = list(range(0, max(1, int(duration) - step), 2))
+    step, timeline, votes = 2, [], Counter()
+    segments = list(range(0, max(1, int(duration) - step), 1))
     total_segments = len(segments)
     
     for idx, start in enumerate(segments):
@@ -156,6 +156,8 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         c_avg = np.mean((c_raw[::2, :] + c_raw[1::2, :]) / 2, axis=1)
         b_seg = get_bass_priority(y[idx_start:idx_end], sr)
         res = solve_key_sniper(c_avg, b_seg)
+        if res['score'] < 0.4: 
+            continue
         weight = 2.0 if (start < 10 or start > (duration - 15)) else 1.0
         votes[res['key']] += int(res['score'] * 100 * weight)
         timeline.append({"Temps": start, "Note": res['key'], "Conf": res['score']})
