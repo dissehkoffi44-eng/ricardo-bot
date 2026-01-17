@@ -115,7 +115,6 @@ def solve_key_sniper(chroma_vector, bass_vector):
                     best_key = f"{NOTES_LIST[i]} {mode}"
     return {"key": best_key, "score": best_overall_score}
 
-# ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     ext = file_name.split('.')[-1].lower()
     try:
@@ -189,14 +188,14 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
             fig_rd = go.Figure(data=go.Scatterpolar(r=res_obj['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
             fig_rd.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)))
             img_rd = fig_rd.to_image(format="png", width=600, height=600)
-            caption = (f" *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
-                       f" *FICHIER:* `{file_name}`\n"
-                       f" *TONALITÉ:* `{final_key.upper()}`\n"
-                       f" *CAMELOT:* `{res_obj['camelot']}`\n"
-                       f" *CONFIANCE:* `{res_obj['conf']}%`\n"
-                       f" *TEMPO:* `{res_obj['tempo']} BPM`\n"
-                       f" *ACCORD:* `{res_obj['tuning']} Hz`\n"
-                       f"{' *MODULATION:* ' + target_key.upper() if mod_detected else ' *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
+            caption = (f" 🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
+                        f" 📄 *FICHIER:* `{file_name}`\n"
+                        f" 🎹 *TONALITÉ:* `{final_key.upper()}`\n"
+                        f" 🎡 *CAMELOT:* `{res_obj['camelot']}`\n"
+                        f" ✅ *CONFIANCE:* `{res_obj['conf']}%`\n"
+                        f" ⚡ *TEMPO:* `{res_obj['tempo']} BPM`\n"
+                        f" 🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
+                        f"{' ⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else ' ✨ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
             files = {'p1': ('timeline.png', img_tl, 'image/png'), 'p2': ('radar.png', img_rd, 'image/png')}
             media = [{'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'}, {'type': 'photo', 'media': 'attach://p2'}]
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
@@ -255,7 +254,7 @@ if uploaded_files:
 
         if data:
             with results_container:
-                st.markdown(f"<div class='file-header'>📝 ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='file-header'>📊 ANALYSE TERMINÉE : {data['name']}</div>", unsafe_allow_html=True)
                 color = "linear-gradient(135deg, #065f46, #064e3b)" if data['conf'] > 85 else "linear-gradient(135deg, #1e293b, #0f172a)"
                 st.markdown(f"""
                     <div class="report-card" style="background:{color};">
@@ -269,7 +268,7 @@ if uploaded_files:
                 with m2: st.markdown(f"<div class='metric-box'><b>ACCORDAGE</b><br><span style='font-size:2em; color:#58a6ff;'>{data['tuning']}</span><br>Hz</div>", unsafe_allow_html=True)
                 with m3:
                     btn_id = f"play_{hash(data['name'])}"
-                    components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🎹 TESTER L'ACCORD</button>
+                    components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🔊 TESTER L'ACCORD</button>
                                     <script>{get_chord_js(btn_id, data['key'])}</script>""", height=110)
 
                 c1, c2 = st.columns([2, 1])
@@ -284,7 +283,7 @@ if uploaded_files:
                 
                 st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
 
-    global_progress_placeholder.success(f"🏁 Mission terminée : {total_files} fichiers analysés avec succès !")
+    global_progress_placeholder.success(f"🎉 Mission terminée : {total_files} fichiers analysés avec succès !")
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/2569/2569107.png", width=80)
