@@ -115,6 +115,7 @@ def solve_key_sniper(chroma_vector, bass_vector):
                     best_key = f"{NOTES_LIST[i]} {mode}"
     return {"key": best_key, "score": best_overall_score}
 
+# ANALYSE SANS CACHE POUR LA BARRE DE PROGRESSION
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     ext = file_name.split('.')[-1].lower()
     try:
@@ -189,13 +190,13 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
             fig_rd.update_layout(template="plotly_dark", polar=dict(radialaxis=dict(visible=False)))
             img_rd = fig_rd.to_image(format="png", width=600, height=600)
             caption = (f" 🎯 *SNIPER M3 - RAPPORT*\n━━━━━━━━━━━━\n"
-                        f" 📄 *FICHIER:* `{file_name}`\n"
-                        f" 🎹 *TONALITÉ:* `{final_key.upper()}`\n"
-                        f" 🎡 *CAMELOT:* `{res_obj['camelot']}`\n"
-                        f" ✅ *CONFIANCE:* `{res_obj['conf']}%`\n"
-                        f" ⚡ *TEMPO:* `{res_obj['tempo']} BPM`\n"
-                        f" 🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
-                        f"{' ⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else ' ✨ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
+                       f" 📄 *FICHIER:* `{file_name}`\n"
+                       f" 🎹 *TONALITÉ:* `{final_key.upper()}`\n"
+                       f" 🎡 *CAMELOT:* `{res_obj['camelot']}`\n"
+                       f" ✅ *CONFIANCE:* `{res_obj['conf']}%`\n"
+                       f" ⚡ *TEMPO:* `{res_obj['tempo']} BPM`\n"
+                       f" 🎸 *ACCORD:* `{res_obj['tuning']} Hz`\n"
+                       f"{' ⚠️ *MODULATION:* ' + target_key.upper() if mod_detected else ' ✨ *STABILITÉ:* OK'}\n━━━━━━━━━━━━")
             files = {'p1': ('timeline.png', img_tl, 'image/png'), 'p2': ('radar.png', img_rd, 'image/png')}
             media = [{'type': 'photo', 'media': 'attach://p1', 'caption': caption, 'parse_mode': 'Markdown'}, {'type': 'photo', 'media': 'attach://p2'}]
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMediaGroup", data={'chat_id': CHAT_ID, 'media': json.dumps(media)}, files=files, timeout=15)
@@ -267,7 +268,7 @@ if uploaded_files:
                 with m1: st.markdown(f"<div class='metric-box'><b>TEMPO</b><br><span style='font-size:2em; color:#10b981;'>{data['tempo']}</span><br>BPM</div>", unsafe_allow_html=True)
                 with m2: st.markdown(f"<div class='metric-box'><b>ACCORDAGE</b><br><span style='font-size:2em; color:#58a6ff;'>{data['tuning']}</span><br>Hz</div>", unsafe_allow_html=True)
                 with m3:
-                    btn_id = f"play_{hash(data['name'])}"
+                    btn_id = f"play_{i}_{hash(data['name'])}"
                     components.html(f"""<button id="{btn_id}" style="width:100%; height:95px; background:linear-gradient(45deg, #4F46E5, #7C3AED); color:white; border:none; border-radius:15px; cursor:pointer; font-weight:bold;">🔊 TESTER L'ACCORD</button>
                                     <script>{get_chord_js(btn_id, data['key'])}</script>""", height=110)
 
@@ -275,11 +276,11 @@ if uploaded_files:
                 with c1: 
                     fig_tl = px.line(pd.DataFrame(data['timeline']), x="Temps", y="Note", markers=True, template="plotly_dark", category_orders={"Note": NOTES_ORDER})
                     fig_tl.update_layout(height=300, margin=dict(l=0, r=0, t=20, b=0))
-                    st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_plot_{hash(f.name)}")
+                    st.plotly_chart(fig_tl, use_container_width=True, key=f"tl_plot_{i}_{hash(f.name)}")
                 with c2: 
                     fig_rd = go.Figure(data=go.Scatterpolar(r=data['chroma'], theta=NOTES_LIST, fill='toself', line_color='#10b981'))
                     fig_rd.update_layout(template="plotly_dark", height=300, polar=dict(radialaxis=dict(visible=False)), margin=dict(l=30, r=30, t=20, b=20))
-                    st.plotly_chart(fig_rd, use_container_width=True, key=f"rd_plot_{hash(f.name)}")
+                    st.plotly_chart(fig_rd, use_container_width=True, key=f"rd_plot_{i}_{hash(f.name)}")
                 
                 st.markdown("<hr style='border-color: #30363d; margin-bottom:40px;'>", unsafe_allow_html=True)
 
