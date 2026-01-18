@@ -1,4 +1,4 @@
-# RCDJ228 SNIPER M3 - VERSION "ROBUSTE" (FIX QUALITÉ AUDIO)
+# RCDJ228 SNIPER M3 - VERSION "ROBUSTE" (FIX QUALITÉ AUDIO & CRASH PANDAS)
 import streamlit as st
 import librosa
 import numpy as np
@@ -55,18 +55,15 @@ st.markdown("""
 
 # --- MOTEURS DE CALCUL AMÉLIORÉS ---
 def apply_sniper_filters(y, sr):
-    # Séparation Harmonique (Isole les instruments mélodiques du bruit/percussions)
     y_harm = librosa.effects.harmonic(y, margin=3.0)
-    # Filtre passe-bande plus serré (60Hz - 3500Hz) pour éliminer le bruit de compression
     nyq = 0.5 * sr
     low, high = 60/nyq, 3500/nyq
     b, a = butter(4, [low, high], btype='band')
     return lfilter(b, a, y_harm)
 
-def solve_key_sniper(cv, bv):
+def solve_key_sniper(cv):
     best_overall_score = -1
     best_key = "Unknown"
-    
     cv = (cv - cv.min()) / (cv.max() - cv.min() + 1e-6)
     
     for p_name, p_data in PROFILES.items():
@@ -75,7 +72,7 @@ def solve_key_sniper(cv, bv):
                 reference = np.roll(p_data[mode], i)
                 score = np.corrcoef(cv, reference)[0, 1]
                 
-                # Bonus "Sniper" pour les intervalles de Quinte et Tierce
+                # Renforcement de la structure harmonique (Quinte et Tierce)
                 if mode == "major":
                     if cv[(i + 7) % 12] > 0.6 and cv[(i + 4) % 12] > 0.4: score *= 1.2
                 else:
@@ -88,7 +85,6 @@ def solve_key_sniper(cv, bv):
 
 def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     try:
-        # Chargement robuste
         with io.BytesIO(file_bytes) as buf:
             y, sr = librosa.load(buf, sr=22050, mono=True)
     except Exception as e:
@@ -99,7 +95,7 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
     tuning = librosa.estimate_tuning(y=y, sr=sr)
     y_filt = apply_sniper_filters(y, sr)
 
-    step, timeline = 1, [] # Step réduit à 1s pour plus de données de lissage
+    step, timeline = 1, []
     segments = list(range(0, max(1, int(duration) - 2), step))
     
     for idx, start in enumerate(segments):
@@ -110,20 +106,30 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         seg = y_filt[idx_start:idx_end]
         if len(seg) < sr or np.max(np.abs(seg)) < 0.02: continue
         
-        # RÉSOLUTION ACCRUE : 36 bins par octave pour capturer les nuances des fichiers compressés
         c_raw = librosa.feature.chroma_cqt(y=seg, sr=sr, tuning=tuning, n_chroma=12, bins_per_octave=36)
         c_avg = np.mean(c_raw, axis=1)
         
-        res = solve_key_sniper(c_avg, None)
+        res = solve_key_sniper(c_avg)
         timeline.append({"Temps": start, "Note": res['key'], "Conf": res['score']})
 
     if not timeline: return None
 
-    # --- LISSAGE PAR CONSENSUS (MODE GLISSANT) ---
+    # --- LISSAGE MANUEL PAR CONSENSUS (Correction du bug Pandas) ---
     df_time = pd.DataFrame(timeline)
-    # On prend la note la plus fréquente sur une fenêtre de 5 secondes pour éliminer les erreurs de qualité
-    df_time['Note'] = df_time['Note'].rolling(window=5, center=True).apply(lambda x: Counter(x).most_common(1)[0][0] if len(x)>0 else x[0], raw=False).fillna(df_time['Note'])
+    notes_series = df_time['Note'].tolist()
+    smoothed_notes = []
+    window_size = 5 # Fenêtre de 5 secondes
+
+    for i in range(len(notes_series)):
+        start_idx = max(0, i - window_size // 2)
+        end_idx = min(len(notes_series), i + window_size // 2 + 1)
+        window_notes = notes_series[start_idx:end_idx]
+        most_common_note = Counter(window_notes).most_common(1)[0][0]
+        smoothed_notes.append(most_common_note)
     
+    df_time['Note'] = smoothed_notes
+    
+    # Résultat final basé sur la note la plus stable
     final_votes = Counter(df_time['Note'])
     final_key = final_votes.most_common(1)[0][0]
     final_conf = int(df_time[df_time['Note'] == final_key]['Conf'].mean() * 100)
@@ -136,7 +142,6 @@ def process_audio_precision(file_bytes, file_name, _progress_callback=None):
         "tuning": round(440 * (2**(tuning/12)), 1), "name": file_name
     }
 
-    # Telegram Notification (Silencieuse)
     if TELEGRAM_TOKEN and CHAT_ID:
         try:
             msg = f"🎯 *SNIPER M3*\n`{file_name}`\n🎹 *{final_key.upper()}* ({res_obj['camelot']})\n✅ Conf: {res_obj['conf']}%"
