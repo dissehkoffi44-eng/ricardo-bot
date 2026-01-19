@@ -150,7 +150,7 @@ if files:
         with st.expander(f"📊 {data['name']}", expanded=True):
             col1, col2 = st.columns([1, 2])
             
-            with col1:
+        with col1:
     st.markdown(f"""
         <div style="background:#1e293b; padding:20px; border-radius:15px; border-left: 5px solid #3b82f6;">
             <h2 style="color:#60a5fa; margin:0;">{data['key'].upper()}</h2>
