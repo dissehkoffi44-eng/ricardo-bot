@@ -155,10 +155,6 @@ if files:
             <h2 style="color:#60a5fa; margin:0;">{data['key'].upper()}</h2>
             <h1 style="font-size:3em; margin:0; color: white;">{data['camelot']}</h1>  <p style="opacity:0.7; color: white;">{data['tempo']} BPM | {data['tuning']} Hz</p> </div>
     """, unsafe_allow_html=True)
-                
-                fig_polar = go.Figure(data=go.Scatterpolar(r=data['chroma_avg'], theta=NOTES, fill='toself', line_color='#60a5fa'))
-                fig_polar.update_layout(template="plotly_dark", height=300, margin=dict(l=20, r=20, t=20, b=20))
-                st.plotly_chart(fig_polar, use_container_width=True)
 
             with col2:
                 df_timeline = pd.DataFrame(data['timeline'])
