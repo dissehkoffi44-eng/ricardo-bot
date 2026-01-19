@@ -121,7 +121,7 @@ def multi_chroma_fusion(y, sr, tuning):
     fused = (0.5 * cqt) + (0.3 * cens) + (0.2 * stft)
     return scipy.ndimage.median_filter(fused, size=(1, 15))
 
-def analyze_engine_v3(file_bytes, file_name):
+def analyze_engine_v3(file_buffer, file_name):
     with io.BytesIO(file_bytes) as b:
         y, sr = librosa.load(file_buffer, sr=22050)
     
@@ -194,7 +194,7 @@ files = st.file_uploader("Upload Audio", type=['mp3','wav','flac'], accept_multi
 if files:
     for f in reversed(files):
         with st.spinner(f"Analyse Deep Fusion : {f.name}"):
-            data = analyze_engine_v3(f.read(), f.name)
+            data = analyze_engine_v3(f, f.name)
             
         with st.expander(f"📊 {data['name']}", expanded=True):
             col1, col2 = st.columns([1, 2])
