@@ -12,7 +12,7 @@ from scipy.signal import butter, lfilter
 import requests
 
 # --- CONFIGURATION SYSTÈME ---
-st.set_page_config(page_title="DJ's Ear Pro Elite v3", page_icon="🎧", layout="wide")
+st.set_page_config(page_title="L'Elite", page_icon="🎧", layout="wide")
 
 # --- GESTION DES SECRETS ---
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
@@ -73,7 +73,7 @@ def send_telegram_expert(data, fig_timeline, fig_radar):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         return
 
-    msg = (f" *DJ'S EAR PRO ELITE REPORT*\n"
+    msg = (f" *L'Elite*\n"
            f"━━━━━━━━━━━━━━━━━━━━\n"
            f" *Fichier:* `{data['name']}`\n\n"
            f" *TONALITÉ PRINCIPALE*\n"
@@ -164,7 +164,7 @@ def analyze_engine_v3(file_object, file_name):
     }
 
 # --- INTERFACE ---
-st.title("🎧 DJ's Ear Elite v3 (Optimized Memory)")
+st.title("🎧 L'Elite")
 
 with st.sidebar:
     st.header("⚙️ Configuration")
