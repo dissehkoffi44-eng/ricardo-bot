@@ -16,8 +16,6 @@ import requests
 st.set_page_config(page_title="DJ's Ear Pro Elite v3", page_icon="🎧", layout="wide")
 
 # --- GESTION DES SECRETS (GitHub / Streamlit Cloud) ---
-# Ces valeurs doivent être configurées dans le dashboard Streamlit Cloud (Settings > Secrets)
-# ou en local dans .streamlit/secrets.toml
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN")
 CHAT_ID = st.secrets.get("CHAT_ID")
 
@@ -30,14 +28,55 @@ CAMELOT_MAP = {
     'F# minor': '11A', 'G minor': '6A', 'G# minor': '1A', 'A minor': '8A', 'A# minor': '3A', 'B minor': '10A'
 }
 
-HYBRID_PROFILES = {
-    "major": np.array([6.35, 2.30, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]),
-    "minor": np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-}
+# --- GÉNÉRATION DE TEMPLATES "RÉELS" À PARTIR D'ACCORDS SIMULÉS ---
+@st.cache_resource
+def generate_real_templates(sr=22050, A4=440.0, duration=1.0):
+    templates = {}
+    for mode in ["major", "minor"]:
+        intervals = [0, 4, 7] if mode == "major" else [0, 3, 7]
+        for i, root in enumerate(NOTES):
+            # Fréquences de la triade (root + third + fifth)
+            freqs = []
+            for intv in intervals:
+                note_num = i + intv
+                freq = A4 * (2 ** ((note_num - 9) / 12))  # C=0 → C4 ~261Hz, A=9=440
+                freqs.append(freq)
+            
+            # Générer signal audio simulé (sinusoïdes + harmoniques pour réalisme)
+            t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+            y = np.zeros_like(t)
+            for f in freqs:
+                y += np.sin(2 * np.pi * f * t)  # Fondamentale
+                y += 0.4 * np.sin(2 * np.pi * 2 * f * t)  # Octave
+                y += 0.2 * np.sin(2 * np.pi * 3 * f * t)  # Tierce harmonique
+            
+            y = librosa.util.normalize(y)
+            
+            # Extraire chroma du "sample réel"
+            chroma = librosa.feature.chroma_cqt(y=y, sr=sr, bins_per_octave=36)
+            chroma_avg = np.mean(chroma, axis=1)
+            chroma_avg = (chroma_avg - np.mean(chroma_avg)) / (np.std(chroma_avg) + 1e-8)
+            templates[f"{root} {mode}"] = chroma_avg
+    return templates
+
+# --- SIGNATURE OF FIFTHS (Méthode alternative géométrique) ---
+def signature_of_fifths_key(chroma_avg):
+    fifths_order = [0,7,2,9,4,11,6,1,8,3,10,5]  # C G D A E B F# C# G# D# A# F
+    weights = [1, 0.9, 0.75, 0.6, 0.45, 0.3, 0.2, 0.15, 0.1, 0.08, 0.06, 0.04]
+    sig = np.zeros(12)
+    for i in range(12):
+        rolled = (np.array(fifths_order) + i) % 12
+        sig[i] = np.sum(chroma_avg[rolled] * np.array(weights))
+    
+    best_root = np.argmax(sig)
+    # Déterminer mode: check si tierce mineure ou majeure domine
+    third_maj = (best_root + 4) % 12
+    third_min = (best_root + 3) % 12
+    mode = "major" if chroma_avg[third_maj] > chroma_avg[third_min] else "minor"
+    return f"{NOTES[best_root]} {mode}", np.max(sig)
 
 # --- FONCTION D'ENVOI TELEGRAM ---
 def send_telegram_expert(data, fig_timeline, fig_radar):
-    """Envoie un rapport complet vers Telegram. Utilise les secrets GitHub/Streamlit."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         st.warning("⚠️ Telegram non configuré (Secrets manquants)")
         return
@@ -54,21 +93,19 @@ def send_telegram_expert(data, fig_timeline, fig_radar):
            f"━━━━━━━━━━━━━━━━━━━━")
 
     try:
-        # 1. Message Texte
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                     json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+                      json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
         
-        # 2. Graphiques (Nécessite 'kaleido')
         for fig, title in [(fig_timeline, "Flux Harmonique"), (fig_radar, "Signature Spectrale")]:
             img_bytes = fig.to_image(format="png", engine="kaleido")
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", 
-                         data={"chat_id": CHAT_ID, "caption": f"📊 {title} - {data['name']}"},
-                         files={"photo": img_bytes})
+                          data={"chat_id": CHAT_ID, "caption": f"📊 {title} - {data['name']}"},
+                          files={"photo": img_bytes})
                          
     except Exception as e:
         st.error(f"Erreur Telegram: {e}")
 
-# --- MOTEUR DE TRAITEMENT (V3) ---
+# --- MOTEUR DE TRAITEMENT (V3 avec templates réels) ---
 def apply_2026_filters(y, sr):
     y = librosa.effects.preemphasis(y)
     y_harm, _ = librosa.effects.hpss(y, margin=(10.0, 2.0))
@@ -96,19 +133,32 @@ def analyze_engine_v3(file_bytes, file_name):
     steps = np.linspace(0, chroma_fused.shape[1], 40, dtype=int)
     results_stream = []
     
+    templates = generate_real_templates(sr=sr)  # Templates "réels"
+    
     for i in range(len(steps)-1):
         segment = chroma_fused[:, steps[i]:steps[i+1]]
         avg_chroma = np.mean(segment, axis=1)
+        avg_chroma_norm = (avg_chroma - np.mean(avg_chroma)) / (np.std(avg_chroma) + 1e-8)
+        
         best_score = -1
         best_key = "Ambiguous"
         
-        for mode in ["major", "minor"]:
-            for n in range(12):
-                ref = np.roll(HYBRID_PROFILES[mode], n)
-                score = np.corrcoef(avg_chroma, ref)[0, 1]
-                if score > best_score:
-                    best_score = score
-                    best_key = f"{NOTES[n]} {mode}"
+        for key, temp in templates.items():
+            score = np.corrcoef(avg_chroma_norm, temp)[0, 1]
+            
+            # Bonus pour tonique forte (si root est le pic max dans chroma)
+            root_idx = NOTES.index(key.split()[0])
+            if np.argmax(avg_chroma) == root_idx:
+                score *= 1.2  # Boost si match parfait avec la "note réelle" visible
+            
+            if score > best_score:
+                best_score = score
+                best_key = key
+        
+        # Vote secondaire avec Signature of Fifths
+        sof_key, sof_score = signature_of_fifths_key(avg_chroma)
+        if sof_score > best_score * 0.9:  # Si proche, prioriser SoF pour robustesse
+            best_key = sof_key
         
         results_stream.append({"time": (steps[i]/chroma_fused.shape[1])*duration, "key": best_key, "score": best_score})
 
@@ -126,9 +176,8 @@ def analyze_engine_v3(file_bytes, file_name):
     }
 
 # --- INTERFACE ---
-st.title("🎧 DJ's Ear Elite v3 (Fusion Engine)")
+st.title("🎧 DJ's Ear Elite v3 (Fusion Engine + Real Templates)")
 
-# Sidebar pour vérifier la config
 with st.sidebar:
     st.header("⚙️ Configuration")
     if TELEGRAM_TOKEN and CHAT_ID:
