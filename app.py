@@ -122,7 +122,6 @@ def multi_chroma_fusion(y, sr, tuning):
     return scipy.ndimage.median_filter(fused, size=(1, 15))
 
 def analyze_engine_v3(file_buffer, file_name):
-    with io.BytesIO(file_bytes) as b:
         y, sr = librosa.load(file_buffer, sr=22050)
     
     tuning = librosa.estimate_tuning(y=y, sr=sr, bins_per_octave=72)
