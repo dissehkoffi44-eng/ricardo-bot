@@ -193,7 +193,7 @@ if files:
                 st.markdown(f"""
                     <div style="background:#1e293b; padding:20px; border-radius:15px; border-left: 5px solid #3b82f6;">
                         <h2 style="color:#60a5fa; margin:0;">{data['key'].upper()}</h2>
-                        <h1 style="font-size:3em; margin:0;">{data['camelot']}</h1>
+                        <h1 style="font-size:3em; margin:0; color: white;">{data['camelot']}</h1>
                         <p style="color: white; opacity: 0.9; margin:0;">{data['tempo']} BPM | {data['tuning']} Hz</p>
                     </div>
                 """, unsafe_allow_html=True)
